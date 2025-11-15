@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Harper + LanguageTool Extension",
+  "description": "Combined grammar, tone, and terminology checker using Harper and LanguageTool.",
+  "version": "1.0.0",
+
+  "icons": {
+    "16": "public/icons/icon16.png",
+    "48": "public/icons/icon48.png",
+    "128": "public/icons/icon128.png"
+  },
+
+  "permissions": ["storage", "scripting", "activeTab"],
+  
+  "host_permissions": [
+    "http://localhost:8081/*",
+    "https://YOUR-LT-SERVER/*",
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "public/icons/icon48.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "harper-worker.js",
+        "harper-init.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
