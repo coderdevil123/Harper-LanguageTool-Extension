@@ -1,116 +1,85 @@
-// background.js - Manifest V3 Service Worker
-import { analyzeWithHarper } from "../engines/harper/harper-lint.js";
-import { mergeResults } from "../engines/merge/merge-results.js";
+console.log("Background loaded 🚀");
 
-async function analyzeText(text) {
-    const lt = await checkWithLanguageTool(text);
-    const harper = await analyzeWithHarper(text);
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+    const tabId = sender?.tab?.id;
 
-    return mergeResults(lt, harper);
-}
+    // USER TEXT → analyze with LT (and Harper later)
+    if (req.type === "USER_TEXT") {
+        analyzeText(req.payload.text).then(result => {
+            chrome.tabs.sendMessage(tabId, {
+                type: "COMBINED_RESULTS",
+                payload: result
+            });
+        });
+        sendResponse(true);
+        return true;
+    }
 
-console.log("Background service worker loaded 🚀");
+    // Bubble requests suggestions
+    if (req.type === "GET_SUGGESTIONS") {
+        const issue = req.payload.issue;
 
-// store last results per tabId
-const tabResults = new Map();
+        let suggestions = [];
 
-// Listen for incoming messages
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  const tabId = sender?.tab?.id;
-
-  if (request.type === "USER_TEXT") {
-    analyzeText(request.payload.text)
-      .then((mergedOutput) => {
-        // store results for this tab
-        if (tabId) tabResults.set(tabId, mergedOutput);
-
-        sendResponse({ success: true, data: mergedOutput });
-
-        // Send results back to content-script for highlighting
-        if (tabId) {
-          chrome.tabs.sendMessage(tabId, {
-            type: "COMBINED_RESULTS",
-            payload: mergedOutput
-          }).catch(() => {});
+        // LanguageTool
+        if (issue.replacements) {
+            suggestions = issue.replacements.map(r => r.value);
         }
-      })
-      .catch((err) => {
-        console.error("Analysis error:", err);
-        sendResponse({ success: false, error: err.toString() });
-      });
 
-    return true; // async response
-  }
+        // Harper
+        if (issue.suggestions) {
+            suggestions = issue.suggestions;
+        }
 
-  // UI bubble asks for suggestions for currently clicked highlight
-  if (request.type === "GET_SUGGESTIONS") {
-    // payload.raw contains the encoded issue from span attribute
-    try {
-      const raw = request.payload.raw;
-      const issue = raw ? JSON.parse(decodeURIComponent(raw)) : null;
+        chrome.tabs.sendMessage(tabId, {
+            type: "SHOW_SUGGESTIONS",
+            payload: {
+                text: issue.text || issue.context?.text,
+                suggestions,
+                position: req.payload.position
+            }
+        });
 
-      // Build suggestion list: if issue came from LanguageTool, check issue.replacements
-      let suggestions = [];
-      if (issue && issue.replacements && Array.isArray(issue.replacements)) {
-        suggestions = issue.replacements.map(r => r.value);
-      } else if (issue && issue.suggestions && Array.isArray(issue.suggestions)) {
-        suggestions = issue.suggestions;
-      }
-
-      // Send back suggestions (background may choose to fetch more context)
-      sendResponse({ success: true, suggestions });
-    } catch (err) {
-      console.error("GET_SUGGESTIONS error:", err);
-      sendResponse({ success: false, suggestions: [] });
+        sendResponse(true);
+        return true;
     }
 
-    return true;
-  }
+    // User clicks a suggestion
+    if (req.type === "APPLY_SUGGESTION") {
+        chrome.tabs.sendMessage(tabId, {
+            type: "APPLY_SUGGESTION",
+            payload: { replacement: req.payload.replacement }
+        });
 
-  // Apply a suggestion: content script will fetch the last selected highlight and replace text
-  if (request.type === "APPLY_SUGGESTION") {
-    // This message originates from popup/bubble -> background -> forward to content script
-    // We forward the payload directly to the active tab
-    if (tabId) {
-      chrome.tabs.sendMessage(tabId, {
-        type: "APPLY_SUGGESTION",
-        payload: request.payload
-      }).catch(() => {});
-      sendResponse({ success: true });
-    } else {
-      sendResponse({ success: false, error: "No active tab" });
+        sendResponse(true);
+        return true;
     }
-    return true;
-  }
 });
 
-// main analysis (calls LT; later add Harper)
+// Run LT
 async function analyzeText(text) {
-  const ltResult = await checkWithLanguageTool(text);
-
-  const harperResult = {
-    tone: [],
-    terminology: []
-  };
-
-  return {
-    grammar: ltResult,
-    harper: harperResult
-  };
+    const lt = await checkWithLanguageTool(text);
+    return { grammar: lt, harper: { tone: [], terminology: [] } };
 }
 
-// Call LanguageTool
 async function checkWithLanguageTool(text) {
-  try {
-    const response = await fetch("http://localhost:8081/v2/check", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ text, language: "en-US" })
-    });
-    const data = await response.json();
-    return data.matches || [];
-  } catch (err) {
-    console.error("LanguageTool API error:", err);
-    return [];
-  }
+    try {
+        // Updated to use your LanguageTool server IP
+        const r = await fetch("http://10.10.10.36:8081/v2/check", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ text, language: "en-US" })
+        });
+        
+        if (!r.ok) {
+            throw new Error(`LT server responded with ${r.status}`);
+        }
+        
+        const data = await r.json();
+        return data.matches || [];
+    } catch (e) {
+        console.error("LanguageTool error:", e);
+        console.warn("⚠️ LanguageTool server not available at http://10.10.10.36:8081");
+        return [];
+    }
 }

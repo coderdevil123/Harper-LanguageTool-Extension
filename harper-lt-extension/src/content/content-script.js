@@ -1,48 +1,54 @@
-// applySuggestion: receives payload { suggestionIndex }
-let lastSuggestions = [];
+import { highlightIssues } from "./highlighter.js";
+import { showBubble, removeBubble } from "./inject-ui.js";
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "COMBINED_RESULTS") {
-    // save latest suggestions for use by GET_SUGGESTIONS if needed
-    lastSuggestions = msg.payload || [];
-    // highlight step (call your highlighter)
-    // highlightIssues(msg.payload);
-  }
+console.log("Harper-LT: content script loaded");
 
-  if (msg.type === "APPLY_SUGGESTION") {
-    applySuggestion(msg.payload);
-  }
+// Track last clicked highlight
+let lastClickedIssue = null;
+
+// Receive results from background → highlight them
+chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "COMBINED_RESULTS") {
+        highlightIssues(msg.payload);
+    }
+
+    // Receive suggestion list for clicked highlight
+    if (msg.type === "SHOW_SUGGESTIONS") {
+        const { text, suggestions, position } = msg.payload;
+        showBubble(text, suggestions, position.x, position.y);
+    }
+
+    // Apply suggestion from background
+    if (msg.type === "APPLY_SUGGESTION") {
+        applySuggestion(msg.payload);
+    }
 });
 
-// applySuggestion replaces the highlighted element's text with chosen suggestion
-function applySuggestion(payload) {
-  // payload.suggestionIndex refers to index in suggestions provided earlier
-  // But we don't have a direct mapping between highlight and suggestion index in background
-  // Strategy: activeElement or last clicked highlight will be focused; use document.activeElement or store lastClickedSpan
-  const span = window.__hlt_last_clicked_span;
-  if (!span) return;
+// When user clicks a highlight
+document.addEventListener("click", (event) => {
+    const el = event.target;
 
-  // Get stored issue payload:
-  const raw = span.getAttribute("data-hlt-payload");
-  const issue = raw ? JSON.parse(decodeURIComponent(raw)) : null;
-  const replacements = (issue && (issue.replacements || issue.suggestions)) || [];
-  const idx = payload.suggestionIndex ?? 0;
-  const replacement = replacements[idx] ? (replacements[idx].value ?? replacements[idx]) : null;
+    if (el.classList.contains("hlt-highlight")) {
+        lastClickedIssue = JSON.parse(decodeURIComponent(el.dataset.hltPayload || "{}"));
 
-  if (replacement) {
-    // Replace span text
-    span.textContent = replacement;
-    span.classList.remove("hlt-highlight");
-    span.removeAttribute("data-hlt-payload");
-    // Optionally, remove style to keep replaced text clean
-    span.style.background = "transparent";
-    span.style.borderBottom = "none";
-  }
+        const rect = el.getBoundingClientRect();
+
+        chrome.runtime.sendMessage({
+            type: "GET_SUGGESTIONS",
+            payload: { issue: lastClickedIssue, position: { x: rect.left, y: rect.top } }
+        });
+
+    } else {
+        removeBubble();
+    }
+});
+
+// Replace text after suggestion click
+function applySuggestion({ replacement }) {
+    if (!lastClickedIssue) return;
+
+    const el = document.querySelector(`span[data-hlt-id="${lastClickedIssue.id}"]`);
+    if (!el) return;
+
+    el.outerText = replacement; // safe replacement
 }
-
-// Track last clicked highlight for the apply flow
-document.addEventListener("click", (e) => {
-  if (e.target && e.target.classList && e.target.classList.contains("hlt-highlight")) {
-    window.__hlt_last_clicked_span = e.target;
-  }
-});
