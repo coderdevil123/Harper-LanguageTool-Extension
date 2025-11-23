@@ -6,16 +6,12 @@ import copy from "rollup-plugin-copy";
 export default defineConfig({
   plugins: [
     react(),
+
+    // Copy manifest + icons to dist/
     copy({
       targets: [
-        {
-          src: "manifest.json",
-          dest: "dist"
-        },
-        {
-          src: "public/icons/**/*",
-          dest: "dist/icons"
-        }
+        { src: "manifest.json", dest: "dist" },
+        { src: "public/icons/**/*", dest: "dist/icons" }
       ],
       hook: "writeBundle"
     })
@@ -24,6 +20,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "public/popup.html"),
@@ -31,9 +28,16 @@ export default defineConfig({
         content: resolve(__dirname, "src/content/content-script.js")
       },
       output: {
-        entryFileNames: "assets/[name].js",
-        chunkFileNames: "assets/[name].js",
-        assetFileNames: "assets/[name].[ext]"
+        entryFileNames: (chunkInfo) => {
+          return 'assets/[name].js';
+        },
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.name && assetInfo.name.endsWith('.html')) {
+            return '[name][extname]';
+          }
+          return 'assets/[name][extname]';
+        }
       }
     }
   }
