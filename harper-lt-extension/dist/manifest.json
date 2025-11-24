@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Harper + LanguageTool Extension",
+  "name": "Harper + LanguageTool",
   "version": "1.0.0",
 
   "icons": {
@@ -21,9 +21,10 @@
     "default_icon": "icons/icon48.png"
   },
 
+  "options_page": "public/options.html",
+
   "background": {
-    "service_worker": "assets/background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
 
   "content_scripts": [

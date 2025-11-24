@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Harper + LanguageTool Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    .setting-group {
+      margin: 20px 0;
+      padding: 15px;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+    }
+    .setting-group h3 {
+      margin-top: 0;
+      color: #555;
+    }
+    label {
+      display: block;
+      margin: 10px 0;
+      cursor: pointer;
+    }
+    input[type="checkbox"] {
+      margin-right: 8px;
+    }
+    .save-btn {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-top: 20px;
+    }
+    .save-btn:hover {
+      background: #45a049;
+    }
+    .status {
+      margin-top: 15px;
+      padding: 10px;
+      border-radius: 4px;
+      display: none;
+    }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Harper + LanguageTool Settings</h1>
+    
+    <div class="setting-group">
+      <h3>General Settings</h3>
+      <label>
+        <input type="checkbox" id="enabled" checked>
+        Enable extension
+      </label>
+    </div>
+
+    <div class="setting-group">
+      <h3>Check Options</h3>
+      <label>
+        <input type="checkbox" id="checkGrammar" checked>
+        Grammar checking
+      </label>
+      <label>
+        <input type="checkbox" id="checkTone" checked>
+        Tone analysis
+      </label>
+      <label>
+        <input type="checkbox" id="checkTerminology" checked>
+        Terminology suggestions
+      </label>
+    </div>
+
+    <button class="save-btn" id="saveBtn">Save Settings</button>
+    <div class="status" id="status">Settings saved successfully!</div>
+  </div>
+
+  <script src="../assests/options.js"></script>
+</body>
+</html>
