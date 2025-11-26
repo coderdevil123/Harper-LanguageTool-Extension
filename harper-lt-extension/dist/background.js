@@ -16,16 +16,15 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         switch (req.type) {
             case 'PING':
                 sendResponse({ status: 'active' });
-                return true;
+                break;
                 
             case 'GET_LAST_RESULTS':
                 sendResponse({ success: true, data: lastAnalysisResults });
-                return true;
+                break;
                 
             case 'REQUEST_REFRESH':
-                // Return cached results
                 sendResponse({ success: true, data: lastAnalysisResults });
-                return true;
+                break;
                 
             case 'APPLY_SUGGESTION':
                 // Forward to active tab
@@ -34,23 +33,28 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                         chrome.tabs.sendMessage(tabs[0].id, {
                             type: "APPLY_SUGGESTION",
                             payload: req.payload
+                        }, () => {
+                            if (chrome.runtime.lastError) {
+                                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+                            } else {
+                                sendResponse({ success: true });
+                            }
                         });
-                        sendResponse({ success: true });
                     } else {
                         sendResponse({ success: false, error: 'No active tab' });
                     }
                 });
-                return true; // Async response
+                return true; // Keep channel open for async response
                 
             case 'TOGGLE_EXTENSION':
                 sendResponse({ success: true });
-                return true;
+                break;
                 
             default:
                 console.warn('Unknown popup message type:', req.type);
                 sendResponse({ success: false, error: 'Unknown message type' });
-                return true;
         }
+        return true; // Keep channel open
     }
 
     // USER TEXT → analyze with LT (and Harper later)
@@ -59,12 +63,21 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             // Store results for popup
             lastAnalysisResults = result;
             
-            chrome.tabs.sendMessage(tabId, {
-                type: "COMBINED_RESULTS",
-                payload: result
-            });
+            if (tabId) {
+                chrome.tabs.sendMessage(tabId, {
+                    type: "COMBINED_RESULTS",
+                    payload: result
+                }, () => {
+                    // Ignore errors if content script isn't ready
+                    if (chrome.runtime.lastError) {
+                        console.warn('Could not send to tab:', chrome.runtime.lastError.message);
+                    }
+                });
+            }
+        }).catch(error => {
+            console.error('Analysis error:', error);
         });
-        sendResponse(true);
+        sendResponse({ success: true });
         return true;
     }
 
@@ -84,29 +97,45 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             suggestions = issue.suggestions;
         }
 
-        chrome.tabs.sendMessage(tabId, {
-            type: "SHOW_SUGGESTIONS",
-            payload: {
-                text: issue.text || issue.context?.text,
-                suggestions,
-                position: req.payload.position
-            }
-        });
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, {
+                type: "SHOW_SUGGESTIONS",
+                payload: {
+                    text: issue.text || issue.context?.text,
+                    suggestions,
+                    position: req.payload.position
+                }
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('Could not show suggestions:', chrome.runtime.lastError.message);
+                }
+            });
+        }
 
-        sendResponse(true);
+        sendResponse({ success: true });
         return true;
     }
 
     // User clicks a suggestion
     if (req.type === "APPLY_SUGGESTION") {
-        chrome.tabs.sendMessage(tabId, {
-            type: "APPLY_SUGGESTION",
-            payload: { replacement: req.payload.replacement }
-        });
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, {
+                type: "APPLY_SUGGESTION",
+                payload: { replacement: req.payload.replacement }
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('Could not apply suggestion:', chrome.runtime.lastError.message);
+                }
+            });
+        }
 
-        sendResponse(true);
+        sendResponse({ success: true });
         return true;
     }
+    
+    // Default fallback
+    sendResponse({ success: false, error: 'Unknown message type' });
+    return true;
 });
 
 // Run LT
@@ -117,7 +146,7 @@ async function analyzeText(text) {
 
 async function checkWithLanguageTool(text) {
     try {
-        // Updated to use your LanguageTool server IP
+        console.log('Checking text with LanguageTool...');
         const r = await fetch("http://10.10.10.36:8081/v2/check", {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -129,6 +158,7 @@ async function checkWithLanguageTool(text) {
         }
         
         const data = await r.json();
+        console.log('LanguageTool found', data.matches?.length || 0, 'issues');
         return data.matches || [];
     } catch (e) {
         console.error("LanguageTool error:", e);
