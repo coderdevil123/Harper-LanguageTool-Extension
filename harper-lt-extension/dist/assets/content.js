@@ -122,15 +122,26 @@
         
         console.log('📝 Analyzing:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
         
-        chrome.runtime.sendMessage({
-            type: "USER_TEXT",
-            payload: { text }
-        }, (response) => {
+        // Wake up service worker first
+        chrome.runtime.sendMessage({ type: "PING" }, (response) => {
             if (chrome.runtime.lastError) {
-                console.error('❌ Send error:', chrome.runtime.lastError.message);
-            } else {
-                console.log('✅ Text sent to background');
+                console.error('❌ Service worker not responding:', chrome.runtime.lastError.message);
+                return;
             }
+            
+            console.log('✅ Service worker active');
+            
+            // Now send the actual text for analysis
+            chrome.runtime.sendMessage({
+                type: "USER_TEXT",
+                payload: { text }
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error('❌ Send error:', chrome.runtime.lastError.message);
+                } else {
+                    console.log('✅ Text sent to background, response:', response);
+                }
+            });
         });
     }
 
@@ -245,11 +256,13 @@
         let suggestions = [];
         
         if (issue.replacements && Array.isArray(issue.replacements)) {
+            // ← LanguageTool provides "replacements" array
             suggestions = issue.replacements.map(r => {
                 if (typeof r === 'string') return r;
-                return r.value || r;
+                return r.value || r;  // ← Getting suggestion from r.value
             });
         } else if (issue.suggestions && Array.isArray(issue.suggestions)) {
+            // ← Harper would provide "suggestions" array (not implemented)
             suggestions = issue.suggestions.map(s => {
                 if (typeof s === 'string') return s;
                 return s.value || s;
@@ -298,9 +311,23 @@
         }
         
         console.log('Populating box...');
+        console.log('Issue:', issue);
         
-        const issueText = issue.context?.text || issue.message || issue.text || 'Issue found';
+        // Get the actual error word/phrase
+        let errorText = '';
+        if (issue.context) {
+            const offset = issue.context.offset;
+            const length = issue.context.length;
+            errorText = issue.context.text.substring(offset, offset + length);
+        } else if (issue.offset !== undefined && issue.length !== undefined) {
+            const fullText = getElementText(activeElement);
+            errorText = fullText.substring(issue.offset, issue.offset + issue.length);
+        } else {
+            errorText = issue.text || issue.context?.text || 'Issue found';
+        }
+        
         const issueMessage = issue.message || issue.shortMessage || 'Issue detected';
+        const contextText = issue.context?.text || '';
         
         let html = `
             <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #f0f0f0;">
@@ -310,11 +337,21 @@
                 <div style="color: #555; font-size: 13px; margin-bottom: 10px;">
                     ${escapeHtml(issueMessage)}
                 </div>
-                <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size: 13px;">
-                    <strong>Found:</strong> "${escapeHtml(issueText)}"
+                <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size: 13px; margin-bottom: 8px;">
+                    <strong>Error:</strong> <span style="background: #ffe082; padding: 2px 4px; border-radius: 3px; font-weight: 600;">${escapeHtml(errorText)}</span>
                 </div>
-            </div>
         `;
+        
+        // Show context if available
+        if (contextText && contextText !== errorText) {
+            html += `
+                <div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; color: #666; font-style: italic;">
+                    Context: "${escapeHtml(contextText)}"
+                </div>
+            `;
+        }
+        
+        html += '</div>';
         
         if (suggestions && suggestions.length > 0) {
             html += '<div style="margin-top: 12px;"><div style="color: #666; font-size: 12px; font-weight: 600; margin-bottom: 8px;">SUGGESTIONS:</div>';
@@ -371,7 +408,6 @@
         
         suggestionBox.innerHTML = html;
         
-        // Add click handlers
         const buttons = suggestionBox.querySelectorAll('.harper-sug-btn');
         buttons.forEach(btn => {
             btn.onclick = function(e) {
@@ -448,31 +484,91 @@
     }
 
     function applySuggestionToElement(suggestion, issue) {
-        console.log('Applying:', suggestion);
+        console.log('Applying suggestion:', suggestion);
+        console.log('Issue details:', issue);
         
-        if (!activeElement) return;
-        
-        const text = getElementText(activeElement);
-        const issueText = issue.context?.text || issue.text || '';
-        
-        if (!issueText) {
-            console.error('No issue text');
+        if (!activeElement) {
+            console.error('No active element');
             return;
         }
         
-        const newText = text.replace(issueText, suggestion);
+        const fullText = getElementText(activeElement);
+        console.log('Full text:', fullText);
+        
+        // Get the actual error text and its position
+        let errorText = '';
+        let offset = 0;
+        let length = 0;
+        
+        // LanguageTool provides context with offset and length
+        if (issue.context) {
+            offset = issue.context.offset;
+            length = issue.context.length;
+            errorText = issue.context.text.substring(offset, offset + length);
+            console.log('Error text from context:', errorText, 'at offset:', offset, 'length:', length);
+        } else if (issue.offset !== undefined && issue.length !== undefined) {
+            // Direct offset and length
+            offset = issue.offset;
+            length = issue.length;
+            errorText = fullText.substring(offset, offset + length);
+            console.log('Error text from offset/length:', errorText);
+        } else {
+            // Fallback: use the whole context text
+            errorText = issue.text || issue.context?.text || '';
+            console.log('Error text (fallback):', errorText);
+        }
+        
+        if (!errorText) {
+            console.error('No error text found');
+            return;
+        }
+        
+        // For LanguageTool with context offset, we need to find the actual position in full text
+        let newText;
+        if (issue.offset !== undefined && issue.length !== undefined) {
+            // We have absolute position in the text
+            const beforeError = fullText.substring(0, issue.offset);
+            const afterError = fullText.substring(issue.offset + issue.length);
+            newText = beforeError + suggestion + afterError;
+            console.log('Replacing using offset:', issue.offset, 'length:', issue.length);
+        } else {
+            // Find and replace the first occurrence
+            const errorIndex = fullText.indexOf(errorText);
+            if (errorIndex === -1) {
+                console.error('Could not find error text in full text');
+                // Try partial match
+                const words = errorText.split(' ');
+                const firstWord = words[0];
+                const firstWordIndex = fullText.indexOf(firstWord);
+                if (firstWordIndex !== -1) {
+                    newText = fullText.substring(0, firstWordIndex) + suggestion + fullText.substring(firstWordIndex + errorText.length);
+                } else {
+                    return;
+                }
+            } else {
+                newText = fullText.substring(0, errorIndex) + suggestion + fullText.substring(errorIndex + errorText.length);
+                console.log('Replacing at index:', errorIndex);
+            }
+        }
+        
+        console.log('New text:', newText);
         
         const tagName = activeElement.tagName.toLowerCase();
         
         if (tagName === 'input' || tagName === 'textarea') {
+            const cursorPos = activeElement.selectionStart;
             activeElement.value = newText;
             activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+            // Restore cursor position
+            if (cursorPos !== null) {
+                activeElement.setSelectionRange(cursorPos, cursorPos);
+            }
         } else if (activeElement.isContentEditable) {
             activeElement.textContent = newText;
             activeElement.dispatchEvent(new Event('input', { bubbles: true }));
         }
         
-        console.log('✅ Applied');
+        console.log('✅ Applied successfully');
         hideSuggestionBox();
         
         currentIssues = currentIssues.filter(i => i !== issue);
@@ -510,50 +606,96 @@
 
     function applySuggestionToElement(suggestion, issue) {
         console.log('Applying suggestion:', suggestion);
+        console.log('Issue details:', issue);
         
         if (!activeElement) {
-            console.error('No active element to apply suggestion to');
+            console.error('No active element');
             return;
         }
         
-        const text = getElementText(activeElement);
-        const issueText = issue.context?.text || issue.text || '';
+        const fullText = getElementText(activeElement);
+        console.log('Full text:', fullText);
         
-        if (!issueText) {
-            console.error('No issue text to replace');
+        // Get the actual error text and its position
+        let errorText = '';
+        let offset = 0;
+        let length = 0;
+        
+        // LanguageTool provides context with offset and length
+        if (issue.context) {
+            offset = issue.context.offset;
+            length = issue.context.length;
+            errorText = issue.context.text.substring(offset, offset + length);
+            console.log('Error text from context:', errorText, 'at offset:', offset, 'length:', length);
+        } else if (issue.offset !== undefined && issue.length !== undefined) {
+            // Direct offset and length
+            offset = issue.offset;
+            length = issue.length;
+            errorText = fullText.substring(offset, offset + length);
+            console.log('Error text from offset/length:', errorText);
+        } else {
+            // Fallback: use the whole context text
+            errorText = issue.text || issue.context?.text || '';
+            console.log('Error text (fallback):', errorText);
+        }
+        
+        if (!errorText) {
+            console.error('No error text found');
             return;
         }
         
-        console.log('Current text:', text);
-        console.log('Replacing:', issueText);
-        console.log('With:', suggestion);
+        // For LanguageTool with context offset, we need to find the actual position in full text
+        let newText;
+        if (issue.offset !== undefined && issue.length !== undefined) {
+            // We have absolute position in the text
+            const beforeError = fullText.substring(0, issue.offset);
+            const afterError = fullText.substring(issue.offset + issue.length);
+            newText = beforeError + suggestion + afterError;
+            console.log('Replacing using offset:', issue.offset, 'length:', issue.length);
+        } else {
+            // Find and replace the first occurrence
+            const errorIndex = fullText.indexOf(errorText);
+            if (errorIndex === -1) {
+                console.error('Could not find error text in full text');
+                // Try partial match
+                const words = errorText.split(' ');
+                const firstWord = words[0];
+                const firstWordIndex = fullText.indexOf(firstWord);
+                if (firstWordIndex !== -1) {
+                    newText = fullText.substring(0, firstWordIndex) + suggestion + fullText.substring(firstWordIndex + errorText.length);
+                } else {
+                    return;
+                }
+            } else {
+                newText = fullText.substring(0, errorIndex) + suggestion + fullText.substring(errorIndex + errorText.length);
+                console.log('Replacing at index:', errorIndex);
+            }
+        }
         
-        // Find and replace the issue text
-        const newText = text.replace(issueText, suggestion);
+        console.log('New text:', newText);
         
         const tagName = activeElement.tagName.toLowerCase();
         
         if (tagName === 'input' || tagName === 'textarea') {
+            const cursorPos = activeElement.selectionStart;
             activeElement.value = newText;
             activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-            activeElement.dispatchEvent(new Event('change', { bubbles: true }));
+            // Restore cursor position
+            if (cursorPos !== null) {
+                activeElement.setSelectionRange(cursorPos, cursorPos);
+            }
         } else if (activeElement.isContentEditable) {
             activeElement.textContent = newText;
             activeElement.dispatchEvent(new Event('input', { bubbles: true }));
         }
         
-        console.log('✅ Suggestion applied, new text:', newText);
-        
+        console.log('✅ Applied successfully');
         hideSuggestionBox();
         
-        // Remove this issue from current issues
         currentIssues = currentIssues.filter(i => i !== issue);
         
-        // Show next issue if available
         if (currentIssues.length > 0) {
-            setTimeout(() => {
-                displayIssueSuggestions(currentIssues[0]);
-            }, 500);
+            setTimeout(() => displayIssueSuggestions(currentIssues[0]), 500);
         }
     }
 

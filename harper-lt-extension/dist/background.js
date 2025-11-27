@@ -6,6 +6,18 @@ let lastAnalysisResults = {
     harper: { tone: [], terminology: [] }
 };
 
+// Keep service worker alive
+let keepAliveInterval;
+
+function keepAlive() {
+    keepAliveInterval = setInterval(() => {
+        console.log('🔄 Keeping service worker alive...');
+    }, 20000); // Every 20 seconds
+}
+
+// Start keeping alive
+keepAlive();
+
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     const tabId = sender?.tab?.id;
 
@@ -59,26 +71,38 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
     // USER TEXT → analyze with LT (and Harper later)
     if (req.type === "USER_TEXT") {
+        console.log('📝 Received USER_TEXT from tab:', tabId);
+        console.log('Text length:', req.payload.text?.length);
+        
         analyzeText(req.payload.text).then(result => {
+            console.log('✅ Analysis complete, issues found:', result.grammar?.length || 0);
+            
             // Store results for popup
             lastAnalysisResults = result;
             
             if (tabId) {
+                console.log('📤 Sending COMBINED_RESULTS to tab:', tabId);
                 chrome.tabs.sendMessage(tabId, {
                     type: "COMBINED_RESULTS",
                     payload: result
-                }, () => {
-                    // Ignore errors if content script isn't ready
+                }, (response) => {
                     if (chrome.runtime.lastError) {
-                        console.warn('Could not send to tab:', chrome.runtime.lastError.message);
+                        console.error('❌ Failed to send results:', chrome.runtime.lastError.message);
+                    } else {
+                        console.log('✅ Results sent successfully');
                     }
                 });
+            } else {
+                console.error('❌ No tabId available');
             }
+            
+            sendResponse({ success: true, issues: result.grammar?.length || 0 });
         }).catch(error => {
-            console.error('Analysis error:', error);
+            console.error('❌ Analysis error:', error);
+            sendResponse({ success: false, error: error.message });
         });
-        sendResponse({ success: true });
-        return true;
+        
+        return true; // Keep channel open for async response
     }
 
     // Bubble requests suggestions
@@ -140,13 +164,18 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
 // Run LT
 async function analyzeText(text) {
-    const lt = await checkWithLanguageTool(text);
-    return { grammar: lt, harper: { tone: [], terminology: [] } };
+    console.log('🔍 Starting analysis for text:', text.substring(0, 50) + '...');
+    const lt = await checkWithLanguageTool(text);  // ← Only LanguageTool
+    console.log('📊 LanguageTool returned:', lt.length, 'issues');
+    return { 
+        grammar: lt,  // ← LanguageTool issues here
+        harper: { tone: [], terminology: [] }  // ← Harper is EMPTY (not implemented yet)
+    };
 }
 
 async function checkWithLanguageTool(text) {
     try {
-        console.log('Checking text with LanguageTool...');
+        console.log('🌐 Checking text with LanguageTool...');
         const r = await fetch("http://10.10.10.36:8081/v2/check", {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -158,10 +187,9 @@ async function checkWithLanguageTool(text) {
         }
         
         const data = await r.json();
-        console.log('LanguageTool found', data.matches?.length || 0, 'issues');
-        return data.matches || [];
+        return data.matches || [];  // ← Returns LanguageTool matches
     } catch (e) {
-        console.error("LanguageTool error:", e);
+        console.error("❌ LanguageTool error:", e);
         console.warn("⚠️ LanguageTool server not available at http://10.10.10.36:8081");
         return [];
     }
