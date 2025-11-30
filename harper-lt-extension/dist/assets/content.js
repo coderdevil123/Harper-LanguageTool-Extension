@@ -204,29 +204,45 @@
         
         currentIssues = [];
         
+        // Collect Grammar issues from LanguageTool FIRST (higher priority)
         if (results.grammar && Array.isArray(results.grammar)) {
             results.grammar.forEach(issue => {
-                currentIssues.push({ ...issue, type: 'grammar' });
+                currentIssues.push({ ...issue, type: 'grammar', priority: 1 });
             });
         }
         
+        // Then add Harper issues
         if (results.harper) {
             if (results.harper.tone && Array.isArray(results.harper.tone)) {
                 results.harper.tone.forEach(issue => {
-                    currentIssues.push({ ...issue, type: 'tone' });
+                    currentIssues.push({ ...issue, type: 'tone', priority: 2 });
                 });
             }
             if (results.harper.terminology && Array.isArray(results.harper.terminology)) {
                 results.harper.terminology.forEach(issue => {
-                    currentIssues.push({ ...issue, type: 'terminology' });
+                    currentIssues.push({ ...issue, type: 'terminology', priority: 3 });
                 });
             }
         }
         
+        // Sort by priority (grammar first, then tone, then terminology)
+        // and then by position in text (offset)
+        currentIssues.sort((a, b) => {
+            if (a.priority !== b.priority) {
+                return a.priority - b.priority;
+            }
+            return (a.offset || 0) - (b.offset || 0);
+        });
+        
         console.log('✅ Total issues:', currentIssues.length);
+        console.log('Issues by type:', {
+            grammar: currentIssues.filter(i => i.type === 'grammar').length,
+            tone: currentIssues.filter(i => i.type === 'tone').length,
+            terminology: currentIssues.filter(i => i.type === 'terminology').length
+        });
         
         if (currentIssues.length > 0 && activeElement) {
-            console.log('🎯 Displaying first issue');
+            console.log('🎯 Displaying first issue:', currentIssues[0].type);
             displayIssueSuggestions(currentIssues[0]);
         } else {
             console.log('No issues to display');
@@ -329,10 +345,19 @@
         const issueMessage = issue.message || issue.shortMessage || 'Issue detected';
         const contextText = issue.context?.text || '';
         
+        // Show issue counter
+        const currentIndex = currentIssues.indexOf(issue) + 1;
+        const totalIssues = currentIssues.length;
+        
         let html = `
             <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #f0f0f0;">
-                <div style="font-weight: 700; color: #2c3e50; margin-bottom: 6px; font-size: 15px;">
-                    ${getIssueIcon(issue.type)} ${getIssueTypeLabel(issue.type)}
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div style="font-weight: 700; color: #2c3e50; font-size: 15px;">
+                        ${getIssueIcon(issue.type)} ${getIssueTypeLabel(issue.type)}
+                    </div>
+                    <div style="font-size: 12px; color: #999; font-weight: 600;">
+                        ${currentIndex} / ${totalIssues}
+                    </div>
                 </div>
                 <div style="color: #555; font-size: 13px; margin-bottom: 10px;">
                     ${escapeHtml(issueMessage)}
@@ -386,6 +411,48 @@
             html += '<div style="color: #999; font-style: italic; margin-top: 12px;">No suggestions</div>';
         }
         
+        // Add navigation buttons if there are multiple issues
+        if (totalIssues > 1) {
+            html += `
+                <div style="display: flex; gap: 8px; margin-top: 12px;">
+                    <button 
+                        id="harper-prev"
+                        style="
+                            flex: 1 !important;
+                            padding: 8px !important;
+                            background: #e3f2fd !important;
+                            border: 1px solid #2196F3 !important;
+                            border-radius: 6px !important;
+                            color: #1976D2 !important;
+                            cursor: pointer !important;
+                            font-size: 13px !important;
+                            font-weight: 600 !important;
+                        "
+                        ${currentIndex === 1 ? 'disabled style="opacity: 0.5; cursor: not-allowed !important;"' : ''}
+                    >
+                        ← Previous
+                    </button>
+                    <button 
+                        id="harper-next"
+                        style="
+                            flex: 1 !important;
+                            padding: 8px !important;
+                            background: #e3f2fd !important;
+                            border: 1px solid #2196F3 !important;
+                            border-radius: 6px !important;
+                            color: #1976D2 !important;
+                            cursor: pointer !important;
+                            font-size: 13px !important;
+                            font-weight: 600 !important;
+                        "
+                        ${currentIndex === totalIssues ? 'disabled style="opacity: 0.5; cursor: not-allowed !important;"' : ''}
+                    >
+                        Next →
+                    </button>
+                </div>
+            `;
+        }
+        
         html += `
             <button 
                 id="harper-dismiss"
@@ -402,12 +469,13 @@
                     font-size: 13px !important;
                 "
             >
-                Dismiss
+                Dismiss All
             </button>
         `;
         
         suggestionBox.innerHTML = html;
         
+        // Add click handlers for suggestions
         const buttons = suggestionBox.querySelectorAll('.harper-sug-btn');
         buttons.forEach(btn => {
             btn.onclick = function(e) {
@@ -427,11 +495,36 @@
             };
         });
         
+        // Navigation buttons
+        const prevBtn = suggestionBox.querySelector('#harper-prev');
+        const nextBtn = suggestionBox.querySelector('#harper-next');
+        
+        if (prevBtn) {
+            prevBtn.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (currentIndex > 1) {
+                    displayIssueSuggestions(currentIssues[currentIndex - 2]);
+                }
+            };
+        }
+        
+        if (nextBtn) {
+            nextBtn.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (currentIndex < totalIssues) {
+                    displayIssueSuggestions(currentIssues[currentIndex]);
+                }
+            };
+        }
+        
         const dismissBtn = suggestionBox.querySelector('#harper-dismiss');
         if (dismissBtn) {
             dismissBtn.onclick = function(e) {
                 e.preventDefault();
                 e.stopPropagation();
+                currentIssues = [];
                 hideSuggestionBox();
             };
             dismissBtn.onmouseenter = function() {

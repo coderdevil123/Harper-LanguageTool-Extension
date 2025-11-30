@@ -32,15 +32,5 @@
       "run_at": "document_idle",
       "all_frames": true
     }
-  ],
-
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "assets/harper-worker.js",
-        "assets/harper-init.js"
-      ],
-      "matches": ["<all_urls>"]
-    }
   ]
 }

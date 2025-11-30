@@ -8,15 +8,31 @@ let lastAnalysisResults = {
 
 // Keep service worker alive
 let keepAliveInterval;
+let harperInitialized = false;
 
 function keepAlive() {
     keepAliveInterval = setInterval(() => {
         console.log('🔄 Keeping service worker alive...');
-    }, 20000); // Every 20 seconds
+    }, 20000);
 }
 
-// Start keeping alive
+// Initialize Harper
+async function initHarper() {
+    try {
+        // For now, using simulation mode
+        // TODO: Replace with actual Harper WASM when ready
+        console.log('🎨 Harper initialized (simulation mode)');
+        harperInitialized = true;
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to initialize Harper:', error);
+        return false;
+    }
+}
+
+// Start keeping alive and init Harper
 keepAlive();
+initHarper();
 
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     const tabId = sender?.tab?.id;
@@ -39,7 +55,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 break;
                 
             case 'APPLY_SUGGESTION':
-                // Forward to active tab
                 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                     if (tabs[0]) {
                         chrome.tabs.sendMessage(tabs[0].id, {
@@ -56,7 +71,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                         sendResponse({ success: false, error: 'No active tab' });
                     }
                 });
-                return true; // Keep channel open for async response
+                return true;
                 
             case 'TOGGLE_EXTENSION':
                 sendResponse({ success: true });
@@ -66,18 +81,20 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 console.warn('Unknown popup message type:', req.type);
                 sendResponse({ success: false, error: 'Unknown message type' });
         }
-        return true; // Keep channel open
+        return true;
     }
 
-    // USER TEXT → analyze with LT (and Harper later)
+    // USER TEXT → analyze with LT and Harper
     if (req.type === "USER_TEXT") {
         console.log('📝 Received USER_TEXT from tab:', tabId);
         console.log('Text length:', req.payload.text?.length);
         
         analyzeText(req.payload.text).then(result => {
-            console.log('✅ Analysis complete, issues found:', result.grammar?.length || 0);
+            console.log('✅ Analysis complete');
+            console.log('Grammar issues:', result.grammar?.length || 0);
+            console.log('Tone issues:', result.harper?.tone?.length || 0);
+            console.log('Terminology issues:', result.harper?.terminology?.length || 0);
             
-            // Store results for popup
             lastAnalysisResults = result;
             
             if (tabId) {
@@ -102,7 +119,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             sendResponse({ success: false, error: error.message });
         });
         
-        return true; // Keep channel open for async response
+        return true;
     }
 
     // Bubble requests suggestions
@@ -111,12 +128,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
         let suggestions = [];
 
-        // LanguageTool
         if (issue.replacements) {
             suggestions = issue.replacements.map(r => r.value);
         }
 
-        // Harper
         if (issue.suggestions) {
             suggestions = issue.suggestions;
         }
@@ -162,14 +177,25 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true;
 });
 
-// Run LT
+// Run both LT and Harper
 async function analyzeText(text) {
     console.log('🔍 Starting analysis for text:', text.substring(0, 50) + '...');
-    const lt = await checkWithLanguageTool(text);  // ← Only LanguageTool
+    
+    // Run both in parallel
+    const [lt, harper] = await Promise.all([
+        checkWithLanguageTool(text),
+        checkWithHarper(text)
+    ]);
+    
     console.log('📊 LanguageTool returned:', lt.length, 'issues');
+    console.log('📊 Harper returned:', harper.tone.length, 'tone,', harper.terminology.length, 'terminology');
+    
     return { 
-        grammar: lt,  // ← LanguageTool issues here
-        harper: { tone: [], terminology: [] }  // ← Harper is EMPTY (not implemented yet)
+        grammar: lt, 
+        harper: {
+            tone: harper.tone,
+            terminology: harper.terminology
+        }
     };
 }
 
@@ -187,10 +213,77 @@ async function checkWithLanguageTool(text) {
         }
         
         const data = await r.json();
-        return data.matches || [];  // ← Returns LanguageTool matches
+        console.log('✅ LanguageTool found', data.matches?.length || 0, 'issues');
+        return data.matches || [];
     } catch (e) {
         console.error("❌ LanguageTool error:", e);
         console.warn("⚠️ LanguageTool server not available at http://10.10.10.36:8081");
         return [];
     }
+}
+
+async function checkWithHarper(text) {
+    if (!harperInitialized) {
+        console.warn('⚠️ Harper not initialized');
+        return { tone: [], terminology: [] };
+    }
+    
+    console.log('🎨 Checking text with Harper...');
+    
+    const tone = [];
+    const terminology = [];
+    
+    // Basic tone detection (intensifiers)
+    const intensifierRegex = /\b(very|really|extremely|absolutely|totally|completely)\b/gi;
+    let match;
+    while ((match = intensifierRegex.exec(text)) !== null) {
+        tone.push({
+            message: "Consider using a more precise word instead of intensifiers",
+            offset: match.index,
+            length: match[0].length,
+            text: match[0],
+            context: {
+                text: text.substring(Math.max(0, match.index - 20), Math.min(text.length, match.index + match[0].length + 20)),
+                offset: Math.min(20, match.index),
+                length: match[0].length
+            },
+            suggestions: ["considerably", "significantly", "remarkably"],
+            type: 'tone'
+        });
+    }
+    
+    // Basic terminology check (informal words)
+    const informalWords = {
+        'gonna': 'going to',
+        'wanna': 'want to',
+        'gotta': 'have to',
+        'kinda': 'kind of',
+        'sorta': 'sort of',
+        'dunno': "don't know",
+        'lemme': 'let me',
+        'gimme': 'give me'
+    };
+    
+    for (const [informal, formal] of Object.entries(informalWords)) {
+        const regex = new RegExp(`\\b${informal}\\b`, 'gi');
+        while ((match = regex.exec(text)) !== null) {
+            terminology.push({
+                message: `Consider using "${formal}" instead of informal "${informal}"`,
+                offset: match.index,
+                length: match[0].length,
+                text: match[0],
+                context: {
+                    text: text.substring(Math.max(0, match.index - 20), Math.min(text.length, match.index + match[0].length + 20)),
+                    offset: Math.min(20, match.index),
+                    length: match[0].length
+                },
+                suggestions: [formal],
+                type: 'terminology'
+            });
+        }
+    }
+    
+    console.log('✅ Harper found', tone.length, 'tone issues and', terminology.length, 'terminology issues');
+    
+    return { tone, terminology };
 }
