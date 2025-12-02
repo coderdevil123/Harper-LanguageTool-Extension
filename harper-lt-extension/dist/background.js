@@ -36,16 +36,21 @@ initHarper();
 
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     const tabId = sender?.tab?.id;
+    
+    console.log('🎯 Message received:', req.type, 'from tabId:', tabId);
+
+    // Handle PING from content script (IMPORTANT!)
+    if (req.type === "PING") {
+        console.log('🏓 PING received, responding...');
+        sendResponse({ status: 'active' });
+        return true;
+    }
 
     // Handle popup messages (no sender.tab for popup)
     if (!sender.tab) {
         console.log('Popup message received:', req.type);
         
         switch (req.type) {
-            case 'PING':
-                sendResponse({ status: 'active' });
-                break;
-                
             case 'GET_LAST_RESULTS':
                 sendResponse({ success: true, data: lastAnalysisResults });
                 break;
@@ -87,13 +92,25 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     // USER TEXT → analyze with LT and Harper
     if (req.type === "USER_TEXT") {
         console.log('📝 Received USER_TEXT from tab:', tabId);
-        console.log('Text length:', req.payload.text?.length);
+        console.log('📝 Text preview:', req.payload.text?.substring(0, 100));
+        console.log('📝 Text length:', req.payload.text?.length);
         
         analyzeText(req.payload.text).then(result => {
             console.log('✅ Analysis complete');
-            console.log('Grammar issues:', result.grammar?.length || 0);
-            console.log('Tone issues:', result.harper?.tone?.length || 0);
-            console.log('Terminology issues:', result.harper?.terminology?.length || 0);
+            console.log('📊 Grammar issues:', result.grammar?.length || 0);
+            console.log('📊 Tone issues:', result.harper?.tone?.length || 0);
+            console.log('📊 Terminology issues:', result.harper?.terminology?.length || 0);
+            
+            // Log actual issues found
+            if (result.grammar?.length > 0) {
+                console.log('Grammar issues:', result.grammar.map(i => i.message));
+            }
+            if (result.harper?.tone?.length > 0) {
+                console.log('Tone issues:', result.harper.tone.map(i => i.message));
+            }
+            if (result.harper?.terminology?.length > 0) {
+                console.log('Terminology issues:', result.harper.terminology.map(i => i.message));
+            }
             
             lastAnalysisResults = result;
             
@@ -106,14 +123,14 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                     if (chrome.runtime.lastError) {
                         console.error('❌ Failed to send results:', chrome.runtime.lastError.message);
                     } else {
-                        console.log('✅ Results sent successfully');
+                        console.log('✅ Results sent successfully, response:', response);
                     }
                 });
             } else {
                 console.error('❌ No tabId available');
             }
             
-            sendResponse({ success: true, issues: result.grammar?.length || 0 });
+            sendResponse({ success: true, issues: (result.grammar?.length || 0) + (result.harper?.tone?.length || 0) + (result.harper?.terminology?.length || 0) });
         }).catch(error => {
             console.error('❌ Analysis error:', error);
             sendResponse({ success: false, error: error.message });

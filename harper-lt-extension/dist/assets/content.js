@@ -9,6 +9,9 @@
     let debounceTimer = null;
     let isEnabled = true;
     let underlinesContainer = null;
+    let initialAnalysisTimer = null;
+    let googleDocsRetryCount = 0;
+    const MAX_GOOGLE_DOCS_RETRIES = 5;
 
     // Initialize immediately
     initialize();
@@ -23,9 +26,15 @@
         document.addEventListener('focusin', handleFocusIn, true);
         document.addEventListener('input', handleInput, true);
         document.addEventListener('click', handleClick, true);
+        document.addEventListener('selectionchange', handleSelectionChange);
         
         // Listen for messages from background
         chrome.runtime.onMessage.addListener(handleMessage);
+        
+        // Auto-analyze existing text after page loads
+        setTimeout(() => {
+            autoAnalyzeExistingText();
+        }, 2000);
         
         // Make test function available
         window.testHarperLT = function() {
@@ -39,7 +48,6 @@
                 console.log("Active element text:", getElementText(activeElement));
             }
             
-            // Show a test suggestion box
             if (suggestionBox) {
                 suggestionBox.innerHTML = `
                     <div style="padding: 20px; text-align: center;">
@@ -64,11 +72,192 @@
         console.log("💡 Type window.testHarperLT() to test");
     }
 
+    function autoAnalyzeExistingText() {
+        console.log('🔍 Auto-analyzing existing text on page...');
+        
+        // Special handling for Google Docs
+        if (window.location.hostname === 'docs.google.com') {
+            console.log('📝 Google Docs detected!');
+            
+            // Longer delay for Google Docs to fully load
+            setTimeout(() => {
+                // Extract all text from Google Docs directly from the DOM
+                const textBlocks = document.querySelectorAll('.kix-lineview-text-block');
+                
+                if (textBlocks.length > 0) {
+                    console.log(`✅ Found ${textBlocks.length} text blocks in Google Docs`);
+                    googleDocsRetryCount = 0; // Reset retry counter
+                    
+                    // Get all text
+                    const fullText = Array.from(textBlocks)
+                        .map(block => block.textContent || block.innerText || '')
+                        .filter(text => text.trim().length > 0)
+                        .join(' ');
+                    
+                    console.log('📝 Extracted text length:', fullText.length);
+                    console.log('📝 Text preview:', fullText.substring(0, 100));
+                    
+                    if (fullText && fullText.trim().length > 5) {
+                        // Use the page container as active element
+                        activeElement = document.querySelector('.kix-page') || document.body;
+                        
+                        // Analyze the text
+                        analyzeGoogleDocsText(fullText);
+                        
+                        // Set up monitoring for changes
+                        const pageContainer = document.querySelector('.kix-appview-editor-container, body');
+                        if (pageContainer) {
+                            let lastText = fullText;
+                            
+                            const observer = new MutationObserver(() => {
+                                clearTimeout(debounceTimer);
+                                debounceTimer = setTimeout(() => {
+                                    const newBlocks = document.querySelectorAll('.kix-lineview-text-block');
+                                    const newText = Array.from(newBlocks)
+                                        .map(block => block.textContent || block.innerText || '')
+                                        .filter(text => text.trim().length > 0)
+                                        .join(' ');
+                                    
+                                    if (newText && newText.trim().length > 5 && newText !== lastText) {
+                                        console.log('📝 Google Docs text changed, re-analyzing...');
+                                        lastText = newText;
+                                        analyzeGoogleDocsText(newText);
+                                    }
+                                }, 2000);
+                            });
+                            
+                            observer.observe(pageContainer, {
+                                childList: true,
+                                subtree: true,
+                                characterData: true
+                            });
+                            
+                            console.log('✅ Monitoring Google Docs for changes');
+                        }
+                    } else {
+                        console.warn('⚠️ No text found in Google Docs');
+                    }
+                } else {
+                    googleDocsRetryCount++;
+                    
+                    if (googleDocsRetryCount < MAX_GOOGLE_DOCS_RETRIES) {
+                        console.warn(`⚠️ Google Docs not fully loaded yet, retrying (${googleDocsRetryCount}/${MAX_GOOGLE_DOCS_RETRIES})...`);
+                        setTimeout(autoAnalyzeExistingText, 3000);
+                    } else {
+                        console.error('❌ Google Docs failed to load after maximum retries');
+                        console.log('💡 You can manually trigger analysis by typing in the document');
+                        
+                        // Set up a listener for any keyboard activity
+                        document.addEventListener('keyup', function handleFirstKeypress() {
+                            console.log('⌨️ Keyboard activity detected, attempting analysis...');
+                            setTimeout(() => {
+                                const blocks = document.querySelectorAll('.kix-lineview-text-block');
+                                if (blocks.length > 0) {
+                                    const text = Array.from(blocks)
+                                        .map(b => b.textContent || '')
+                                        .join(' ');
+                                    if (text.trim().length > 5) {
+                                        activeElement = document.querySelector('.kix-page') || document.body;
+                                        analyzeGoogleDocsText(text);
+                                        document.removeEventListener('keyup', handleFirstKeypress);
+                                    }
+                                }
+                            }, 1000);
+                        }, { once: false });
+                    }
+                }
+            }, 5000); // Wait 5 seconds for Google Docs to load
+            
+            return;
+        }
+        
+        // For regular websites
+        const editableElements = document.querySelectorAll('input[type="text"], input[type="email"], textarea, [contenteditable="true"]');
+        
+        editableElements.forEach(element => {
+            const text = getElementText(element);
+            if (text && text.trim().length > 5) {
+                console.log('📝 Found text in', element.tagName, '- analyzing...');
+                activeElement = element;
+                analyzeText(element);
+            }
+        });
+    }
+
+    function analyzeGoogleDocsText(text) {
+        if (!text || text.trim().length < 5) {
+            console.log('⏭️ Text too short, skipping');
+            return;
+        }
+        
+        console.log('📝 Analyzing Google Docs text:', text.substring(0, 100) + '...');
+        
+        // Check if extension context is valid
+        if (!chrome.runtime?.id) {
+            console.warn('⚠️ Extension context invalidated. Please refresh the page.');
+            return;
+        }
+        
+        // Wake up service worker
+        try {
+            chrome.runtime.sendMessage({ type: "PING" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error('❌ Service worker not responding:', chrome.runtime.lastError.message);
+                    return;
+                }
+                
+                // Send text for analysis
+                chrome.runtime.sendMessage({
+                    type: "USER_TEXT",
+                    payload: { text }
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('❌ Send error:', chrome.runtime.lastError.message);
+                    } else {
+                        console.log('✅ Text sent to background, response:', response);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('❌ Extension error:', error.message);
+            console.warn('⚠️ Extension was reloaded. Please refresh this page.');
+        }
+    }
+
+    function handleSelectionChange() {
+        // Debounce selection changes
+        clearTimeout(initialAnalysisTimer);
+        initialAnalysisTimer = setTimeout(() => {
+            const selection = window.getSelection();
+            if (selection && selection.toString().trim().length > 5) {
+                const selectedText = selection.toString();
+                console.log('📝 Text selected:', selectedText.substring(0, 50) + '...');
+                
+                // Find the element containing the selection
+                const element = selection.anchorNode?.parentElement;
+                if (element && isEditableElement(element)) {
+                    activeElement = element;
+                    analyzeText(element);
+                }
+            }
+        }, 500);
+    }
+
     function handleFocusIn(e) {
         const target = e.target;
         if (isEditableElement(target)) {
             activeElement = target;
             console.log('✓ Focused:', target.tagName, target.type || '', target.className);
+            
+            // Auto-analyze existing text in focused element
+            const text = getElementText(target);
+            if (text && text.trim().length > 5) {
+                console.log('📝 Auto-analyzing existing text on focus...');
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    analyzeText(target);
+                }, 1000);
+            }
         }
     }
 
@@ -81,10 +270,8 @@
         
         console.log('⌨️ Input detected, length:', text.length);
         
-        // Clear underlines while typing
         clearUnderlines();
         
-        // Debounce the analysis
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
             console.log('⏰ Analyzing after debounce...');
@@ -93,7 +280,6 @@
     }
 
     function handleClick(e) {
-        // Don't close if clicking on underline
         if (e.target.classList.contains('harper-lt-underline')) {
             return;
         }
@@ -106,7 +292,14 @@
     function isEditableElement(element) {
         if (!element) return false;
         
-        const tagName = element.tagName.toLowerCase();
+        // Special handling for Google Docs
+        if (window.location.hostname === 'docs.google.com') {
+            return element.classList?.contains('kix-paginateddocumentplugin') || 
+                   element.classList?.contains('docs-texteventtarget-iframe') ||
+                   element.getAttribute('contenteditable') === 'true';
+        }
+        
+        const tagName = element.tagName?.toLowerCase() || '';
         
         if (tagName === 'input') {
             const type = (element.type || 'text').toLowerCase();
@@ -116,6 +309,8 @@
         
         if (tagName === 'textarea') return true;
         if (element.isContentEditable) return true;
+        if (element.getAttribute('contenteditable') === 'true') return true;
+        if (element.hasAttribute('contenteditable')) return true;
         
         return false;
     }
@@ -131,38 +326,54 @@
         
         console.log('📝 Analyzing:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
         
+        // Check if extension context is valid
+        if (!chrome.runtime?.id) {
+            console.warn('⚠️ Extension context invalidated. Please refresh the page.');
+            return;
+        }
+        
         // Wake up service worker first
-        chrome.runtime.sendMessage({ type: "PING" }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error('❌ Service worker not responding:', chrome.runtime.lastError.message);
-                return;
-            }
-            
-            console.log('✅ Service worker active');
-            
-            // Now send the actual text for analysis
-            chrome.runtime.sendMessage({
-                type: "USER_TEXT",
-                payload: { text }
-            }, (response) => {
+        try {
+            chrome.runtime.sendMessage({ type: "PING" }, (response) => {
                 if (chrome.runtime.lastError) {
-                    console.error('❌ Send error:', chrome.runtime.lastError.message);
-                } else {
-                    console.log('✅ Text sent to background, response:', response);
+                    console.error('❌ Service worker not responding:', chrome.runtime.lastError.message);
+                    return;
                 }
+                
+                console.log('✅ Service worker active');
+                
+                // Now send the actual text for analysis
+                chrome.runtime.sendMessage({
+                    type: "USER_TEXT",
+                    payload: { text }
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('❌ Send error:', chrome.runtime.lastError.message);
+                    } else {
+                        console.log('✅ Text sent to background, response:', response);
+                    }
+                });
             });
-        });
+        } catch (error) {
+            console.error('❌ Extension error:', error.message);
+            console.warn('⚠️ Extension was reloaded. Please refresh this page.');
+        }
     }
 
     function getElementText(element) {
         if (!element) return '';
         
-        const tagName = element.tagName.toLowerCase();
+        const tagName = element.tagName?.toLowerCase() || '';
+        
+        // Special handling for Google Docs
+        if (window.location.hostname === 'docs.google.com') {
+            return element.innerText || element.textContent || '';
+        }
         
         if (tagName === 'input' || tagName === 'textarea') {
             return element.value || '';
-        } else if (element.isContentEditable) {
-            return element.textContent || element.innerText || '';
+        } else if (element.isContentEditable || element.getAttribute('contenteditable') === 'true') {
+            return element.innerText || element.textContent || '';
         }
         return '';
     }
@@ -254,10 +465,31 @@
             position: absolute !important;
             pointer-events: none !important;
             z-index: 2147483646 !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
         `;
         
         document.body.appendChild(underlinesContainer);
         console.log('✅ Underlines container created');
+        
+        // Redraw underlines on scroll
+        window.addEventListener('scroll', () => {
+            if (currentIssues.length > 0 && activeElement) {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    drawUnderlines();
+                }, 100);
+            }
+        }, true);
+        
+        // Redraw on window resize
+        window.addEventListener('resize', () => {
+            if (currentIssues.length > 0 && activeElement) {
+                drawUnderlines();
+            }
+        });
     }
 
     function clearUnderlines() {
@@ -281,301 +513,204 @@
         
         console.log('Drawing underlines for', currentIssues.length, 'issues');
         
-        const elementRect = activeElement.getBoundingClientRect();
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-        
-        // Get element's computed style
-        const computedStyle = window.getComputedStyle(activeElement);
-        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-        const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-        const fontSize = parseFloat(computedStyle.fontSize) || 14;
-        const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.5;
+        // Use a more accurate method to find text positions
+        const text = getElementText(activeElement);
         
         currentIssues.forEach(issue => {
             const color = getUnderlineColor(issue.type);
             const offset = issue.offset || 0;
             const length = issue.length || 0;
             
-            if (!length) return;
+            if (!length) {
+                console.warn('Issue has no length, skipping:', issue);
+                return;
+            }
             
-            // Create underline element
-            const underline = document.createElement('div');
-            underline.className = 'harper-lt-underline';
-            underline.style.cssText = `
-                position: absolute !important;
-                height: 2px !important;
-                background: ${color} !important;
-                pointer-events: auto !important;
-                cursor: pointer !important;
-                border-radius: 1px !important;
-            `;
+            console.log(`Drawing underline for: "${text.substring(offset, offset + length)}" at offset ${offset}`);
             
-            // Calculate position (approximate - works for single line)
-            const charWidth = fontSize * 0.6; // Approximate character width
-            const left = elementRect.left + scrollLeft + paddingLeft + (offset * charWidth);
-            const top = elementRect.top + scrollTop + paddingTop + lineHeight - 2;
-            const width = length * charWidth;
+            // Try to find the actual text position in the DOM
+            const range = document.createRange();
+            const selection = window.getSelection();
             
-            underline.style.left = left + 'px';
-            underline.style.top = top + 'px';
-            underline.style.width = width + 'px';
-            
-            // Add wavy effect
-            underline.style.backgroundImage = `linear-gradient(45deg, transparent 50%, ${color} 50%, ${color} 100%)`;
-            underline.style.backgroundSize = '4px 4px';
-            
-            // Click handler to show suggestion
-            underline.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                displayIssueSuggestions(issue);
-            };
-            
-            underlinesContainer.appendChild(underline);
+            try {
+                // For contenteditable or regular textareas
+                const tagName = activeElement.tagName?.toLowerCase();
+                
+                if (tagName === 'textarea' || tagName === 'input') {
+                    // For textarea/input, we need to create a mirror div to measure position
+                    drawUnderlineForInputElement(activeElement, issue, color);
+                } else if (activeElement.isContentEditable) {
+                    // For contenteditable, use Range API
+                    drawUnderlineForContentEditable(activeElement, issue, color, text);
+                } else {
+                    console.warn('Unsupported element type for underlines');
+                }
+            } catch (error) {
+                console.error('Error drawing underline:', error);
+            }
         });
         
         console.log('✅ Underlines drawn');
     }
 
-    function getUnderlineColor(type) {
-        switch (type) {
-            case 'grammar':
-                return '#f44336'; // Red for grammar/spelling
-            case 'terminology':
-                return '#2196F3'; // Blue for terminology
-            case 'tone':
-                return '#4CAF50'; // Green for tone
-            default:
-                return '#FF9800'; // Orange for others
-        }
-    }
-
-    function handleResults(results) {
-        console.log('📊 Processing results...');
-        console.log('Grammar:', results.grammar?.length || 0);
-        console.log('Harper tone:', results.harper?.tone?.length || 0);
-        console.log('Harper terminology:', results.harper?.terminology?.length || 0);
+    function drawUnderlineForInputElement(element, issue, color) {
+        // For input/textarea, create a mirror element to measure text
+        const rect = element.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
         
-        currentIssues = [];
+        const computedStyle = window.getComputedStyle(element);
+        const fontSize = parseFloat(computedStyle.fontSize) || 16;
+        const fontFamily = computedStyle.fontFamily;
+        const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.5;
+        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+        const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
         
-        // Collect Grammar issues from LanguageTool FIRST (higher priority)
-        if (results.grammar && Array.isArray(results.grammar)) {
-            results.grammar.forEach(issue => {
-                currentIssues.push({ ...issue, type: 'grammar', priority: 1 });
-            });
-        }
+        // Create temporary canvas to measure text width accurately
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        context.font = `${fontSize}px ${fontFamily}`;
         
-        // Then add Harper issues
-        if (results.harper) {
-            if (results.harper.tone && Array.isArray(results.harper.tone)) {
-                results.harper.tone.forEach(issue => {
-                    currentIssues.push({ ...issue, type: 'tone', priority: 2 });
-                });
-            }
-            if (results.harper.terminology && Array.isArray(results.harper.terminology)) {
-                results.harper.terminology.forEach(issue => {
-                    currentIssues.push({ ...issue, type: 'terminology', priority: 3 });
-                });
-            }
-        }
+        const text = element.value || '';
+        const beforeError = text.substring(0, issue.offset);
+        const errorText = text.substring(issue.offset, issue.offset + issue.length);
         
-        // Sort by priority and position
-        currentIssues.sort((a, b) => {
-            if (a.priority !== b.priority) {
-                return a.priority - b.priority;
-            }
-            return (a.offset || 0) - (b.offset || 0);
-        });
+        // Measure actual text width
+        const beforeWidth = context.measureText(beforeError).width;
+        const errorWidth = context.measureText(errorText).width;
         
-        console.log('✅ Total issues:', currentIssues.length);
-        console.log('Issues by type:', {
-            grammar: currentIssues.filter(i => i.type === 'grammar').length,
-            tone: currentIssues.filter(i => i.type === 'tone').length,
-            terminology: currentIssues.filter(i => i.type === 'terminology').length
-        });
-        
-        // Draw underlines for all issues
-        drawUnderlines();
-        
-        if (currentIssues.length > 0 && activeElement) {
-            console.log('🎯 Displaying first issue:', currentIssues[0].type);
-            displayIssueSuggestions(currentIssues[0]);
-        } else {
-            console.log('No issues to display');
-            hideSuggestionBox();
-        }
-    }
-
-    function displayIssueSuggestions(issue) {
-        console.log('💡 Displaying suggestions...');
-        
-        if (!activeElement) {
-            console.error('No active element');
-            return;
-        }
-        
-        const suggestions = getSuggestionsFromIssue(issue);
-        console.log('Suggestions:', suggestions);
-        
-        positionSuggestionBox(activeElement);
-        populateSuggestionBox(issue, suggestions);
-        showSuggestionBox();
-        
-        console.log('✅ Suggestion box shown');
-    }
-
-    function getSuggestionsFromIssue(issue) {
-        let suggestions = [];
-        
-        if (issue.replacements && Array.isArray(issue.replacements)) {
-            // ← LanguageTool provides "replacements" array
-            suggestions = issue.replacements.map(r => {
-                if (typeof r === 'string') return r;
-                return r.value || r;  // ← Getting suggestion from r.value
-            });
-        } else if (issue.suggestions && Array.isArray(issue.suggestions)) {
-            // ← Harper would provide "suggestions" array (not implemented)
-            suggestions = issue.suggestions.map(s => {
-                if (typeof s === 'string') return s;
-                return s.value || s;
-            });
-        }
-        
-        return suggestions.filter(s => s && s.trim());
-    }
-
-    function createSuggestionBox() {
-        if (suggestionBox) {
-            console.log('Suggestion box already exists');
-            return;
-        }
-        
-        console.log('Creating suggestion box...');
-        
-        suggestionBox = document.createElement('div');
-        suggestionBox.id = 'harper-lt-suggestion-box';
-        
-        suggestionBox.style.cssText = `
-            position: fixed !important;
-            z-index: 2147483647 !important;
-            background: white !important;
-            border: 2px solid #4CAF50 !important;
-            border-radius: 8px !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
-            padding: 16px !important;
-            min-width: 300px !important;
-            max-width: 420px !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-            font-size: 14px !important;
-            line-height: 1.5 !important;
-            display: none !important;
-            color: #333 !important;
-        `;
-        
-        document.body.appendChild(suggestionBox);
-        console.log('✅ Suggestion box created');
-        
-        // Create underlines container
-        createUnderlinesContainer();
-    }
-
-    function createUnderlinesContainer() {
-        if (underlinesContainer) {
-            console.log('Underlines container already exists');
-            return;
-        }
-        
-        console.log('Creating underlines container...');
-        
-        underlinesContainer = document.createElement('div');
-        underlinesContainer.id = 'harper-lt-underlines';
-        underlinesContainer.style.cssText = `
+        // Create underline
+        const underline = document.createElement('div');
+        underline.className = 'harper-lt-underline';
+        underline.style.cssText = `
             position: absolute !important;
-            pointer-events: none !important;
-            z-index: 2147483646 !important;
+            height: 2px !important;
+            background: ${color} !important;
+            pointer-events: auto !important;
+            cursor: pointer !important;
+            border-radius: 1px !important;
+            box-shadow: 0 0 2px ${color} !important;
         `;
         
-        document.body.appendChild(underlinesContainer);
-        console.log('✅ Underlines container created');
+        // Calculate position using measured width
+        const left = rect.left + scrollLeft + paddingLeft + beforeWidth;
+        const top = rect.top + scrollTop + paddingTop + lineHeight - 2;
+        
+        underline.style.left = left + 'px';
+        underline.style.top = top + 'px';
+        underline.style.width = errorWidth + 'px';
+        
+        // Add wavy effect
+        underline.style.backgroundImage = `repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 2px,
+            ${color} 2px,
+            ${color} 4px
+        )`;
+        underline.style.backgroundSize = '6px 2px';
+        
+        // Click handler
+        underline.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            displayIssueSuggestions(issue);
+        };
+        
+        underlinesContainer.appendChild(underline);
+        console.log(`✓ Underline created at ${left}px, width ${errorWidth}px`);
     }
 
-    function clearUnderlines() {
-        if (underlinesContainer) {
-            underlinesContainer.innerHTML = '';
+    function drawUnderlineForContentEditable(element, issue, color, fullText) {
+        // For contenteditable elements, use TreeWalker to find text nodes
+        const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+        
+        let currentOffset = 0;
+        let targetNode = null;
+        let offsetInNode = 0;
+        
+        // Find the text node containing our error
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const nodeLength = node.textContent.length;
+            
+            if (currentOffset + nodeLength > issue.offset) {
+                targetNode = node;
+                offsetInNode = issue.offset - currentOffset;
+                break;
+            }
+            
+            currentOffset += nodeLength;
         }
-    }
-
-    function drawUnderlines() {
-        if (!activeElement || !underlinesContainer) {
-            console.log('Cannot draw underlines: missing element or container');
+        
+        if (!targetNode) {
+            console.warn('Could not find text node for issue at offset', issue.offset);
             return;
         }
         
-        clearUnderlines();
-        
-        if (currentIssues.length === 0) {
-            console.log('No issues to underline');
-            return;
+        try {
+            // Create a range for the error text
+            const range = document.createRange();
+            range.setStart(targetNode, offsetInNode);
+            range.setEnd(targetNode, Math.min(offsetInNode + issue.length, targetNode.textContent.length));
+            
+            // Get the bounding rect of the range
+            const rects = range.getClientRects();
+            
+            if (rects.length === 0) {
+                console.warn('No rects for range');
+                return;
+            }
+            
+            // Create underlines for each rect (handles multi-line)
+            Array.from(rects).forEach(rect => {
+                const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+                
+                const underline = document.createElement('div');
+                underline.className = 'harper-lt-underline';
+                underline.style.cssText = `
+                    position: absolute !important;
+                    height: 2px !important;
+                    background: ${color} !important;
+                    pointer-events: auto !important;
+                    cursor: pointer !important;
+                    border-radius: 1px !important;
+                    box-shadow: 0 0 2px ${color} !important;
+                `;
+                
+                underline.style.left = (rect.left + scrollLeft) + 'px';
+                underline.style.top = (rect.bottom + scrollTop - 2) + 'px';
+                underline.style.width = rect.width + 'px';
+                
+                // Add wavy effect
+                underline.style.backgroundImage = `repeating-linear-gradient(
+                    45deg,
+                    transparent,
+                    transparent 2px,
+                    ${color} 2px,
+                    ${color} 4px
+                )`;
+                underline.style.backgroundSize = '6px 2px';
+                
+                // Click handler
+                underline.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    displayIssueSuggestions(issue);
+                };
+                
+                underlinesContainer.appendChild(underline);
+                console.log(`✓ ContentEditable underline at ${rect.left}px, width ${rect.width}px`);
+            });
+        } catch (error) {
+            console.error('Error creating range:', error);
         }
-        
-        console.log('Drawing underlines for', currentIssues.length, 'issues');
-        
-        const elementRect = activeElement.getBoundingClientRect();
-        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-        
-        // Get element's computed style
-        const computedStyle = window.getComputedStyle(activeElement);
-        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
-        const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
-        const fontSize = parseFloat(computedStyle.fontSize) || 14;
-        const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.5;
-        
-        currentIssues.forEach(issue => {
-            const color = getUnderlineColor(issue.type);
-            const offset = issue.offset || 0;
-            const length = issue.length || 0;
-            
-            if (!length) return;
-            
-            // Create underline element
-            const underline = document.createElement('div');
-            underline.className = 'harper-lt-underline';
-            underline.style.cssText = `
-                position: absolute !important;
-                height: 2px !important;
-                background: ${color} !important;
-                pointer-events: auto !important;
-                cursor: pointer !important;
-                border-radius: 1px !important;
-            `;
-            
-            // Calculate position (approximate - works for single line)
-            const charWidth = fontSize * 0.6; // Approximate character width
-            const left = elementRect.left + scrollLeft + paddingLeft + (offset * charWidth);
-            const top = elementRect.top + scrollTop + paddingTop + lineHeight - 2;
-            const width = length * charWidth;
-            
-            underline.style.left = left + 'px';
-            underline.style.top = top + 'px';
-            underline.style.width = width + 'px';
-            
-            // Add wavy effect
-            underline.style.backgroundImage = `linear-gradient(45deg, transparent 50%, ${color} 50%, ${color} 100%)`;
-            underline.style.backgroundSize = '4px 4px';
-            
-            // Click handler to show suggestion
-            underline.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                displayIssueSuggestions(issue);
-            };
-            
-            underlinesContainer.appendChild(underline);
-        });
-        
-        console.log('✅ Underlines drawn');
     }
 
     function getUnderlineColor(type) {
@@ -691,6 +826,8 @@
             return;
         }
         
+        suggestionBox.innerHTML = ''; // Clear first
+        
         console.log('Populating box...');
         console.log('Issue:', issue);
         
@@ -732,7 +869,6 @@
                 </div>
         `;
         
-        // Show context if available
         if (contextText && contextText !== errorText) {
             html += `
                 <div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; color: #666; font-style: italic;">
@@ -840,9 +976,9 @@
         
         suggestionBox.innerHTML = html;
         
-        // Add click handlers for suggestions
-        const buttons = suggestionBox.querySelectorAll('.harper-sug-btn');
-        buttons.forEach(btn => {
+        // Add click handlers
+        const suggestionButtons = suggestionBox.querySelectorAll('.harper-sug-btn');
+        suggestionButtons.forEach(btn => {
             btn.onclick = function(e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -860,27 +996,22 @@
             };
         });
         
-        // Navigation buttons
         const prevBtn = suggestionBox.querySelector('#harper-prev');
         const nextBtn = suggestionBox.querySelector('#harper-next');
         
-        if (prevBtn) {
+        if (prevBtn && currentIndex > 1) {
             prevBtn.onclick = function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                if (currentIndex > 1) {
-                    displayIssueSuggestions(currentIssues[currentIndex - 2]);
-                }
+                displayIssueSuggestions(currentIssues[currentIndex - 2]);
             };
         }
         
-        if (nextBtn) {
+        if (nextBtn && currentIndex < totalIssues) {
             nextBtn.onclick = function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                if (currentIndex < totalIssues) {
-                    displayIssueSuggestions(currentIssues[currentIndex]);
-                }
+                displayIssueSuggestions(currentIssues[currentIndex]);
             };
         }
         
@@ -890,6 +1021,7 @@
                 e.preventDefault();
                 e.stopPropagation();
                 currentIssues = [];
+                clearUnderlines();
                 hideSuggestionBox();
             };
             dismissBtn.onmouseenter = function() {
@@ -1004,7 +1136,7 @@
         
         console.log('New text:', newText);
         
-        const tagName = activeElement.tagName.toLowerCase();
+        const tagName = activeElement.tagName?.toLowerCase();
         
         if (tagName === 'input' || tagName === 'textarea') {
             const cursorPos = activeElement.selectionStart;

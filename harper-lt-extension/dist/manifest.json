@@ -29,7 +29,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["assets/content.js"],
-      "run_at": "document_idle",
+      "run_at": "document_end",
       "all_frames": true
     }
   ]

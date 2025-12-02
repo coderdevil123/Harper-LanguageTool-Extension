@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Harper-LT Extension Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #4CAF50;
+        }
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 15px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .instructions {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #ffc107;
+            margin: 20px 0;
+        }
+        .instructions h3 {
+            margin-top: 0;
+            color: #856404;
+        }
+        .instructions ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 Harper-LT Extension Test Page</h1>
+    
+    <div class="instructions">
+        <h3>📋 Testing Instructions:</h3>
+        <ol>
+            <li><strong>Open DevTools</strong> - Press F12</li>
+            <li><strong>Go to Console tab</strong></li>
+            <li><strong>Click in the textarea below</strong></li>
+            <li><strong>Type: "gonna write something very important"</strong></li>
+            <li><strong>Wait 2 seconds</strong></li>
+            <li><strong>Check the console for logs</strong></li>
+            <li><strong>You should see colored underlines appear!</strong></li>
+        </ol>
+    </div>
+    
+    <h2>Type here to test the extension:</h2>
+    <textarea 
+        placeholder="Type something here... Try: 'gonna', 'very', 'wanna', etc."
+        id="testArea"
+    >gonna write something very important</textarea>
+    
+    <h2>Another text area:</h2>
+    <textarea 
+        placeholder="Or type here..."
+        id="testArea2"
+    ></textarea>
+    
+    <h2>Input field test:</h2>
+    <input 
+        type="text" 
+        placeholder="Type 'gonna' here too"
+        style="width: 100%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px;"
+    />
+
+    <script>
+        console.log('=== TEST PAGE LOADED ===');
+        console.log('✅ Page is ready for testing');
+        console.log('💡 Click in the textarea above and start typing');
+        
+        // Auto-focus on the first textarea after 1 second
+        setTimeout(() => {
+            document.getElementById('testArea').focus();
+            console.log('👉 Textarea focused - start typing!');
+        }, 1000);
+    </script>
+</body>
+</html>
