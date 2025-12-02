@@ -8,6 +8,7 @@
     let currentIssues = [];
     let debounceTimer = null;
     let isEnabled = true;
+    let underlinesContainer = null;
 
     // Initialize immediately
     initialize();
@@ -80,6 +81,9 @@
         
         console.log('⌨️ Input detected, length:', text.length);
         
+        // Clear underlines while typing
+        clearUnderlines();
+        
         // Debounce the analysis
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
@@ -89,6 +93,11 @@
     }
 
     function handleClick(e) {
+        // Don't close if clicking on underline
+        if (e.target.classList.contains('harper-lt-underline')) {
+            return;
+        }
+        
         if (suggestionBox && !suggestionBox.contains(e.target) && e.target !== activeElement) {
             hideSuggestionBox();
         }
@@ -196,6 +205,152 @@
         return true;
     }
 
+    function createSuggestionBox() {
+        if (suggestionBox) {
+            console.log('Suggestion box already exists');
+            return;
+        }
+        
+        console.log('Creating suggestion box...');
+        
+        suggestionBox = document.createElement('div');
+        suggestionBox.id = 'harper-lt-suggestion-box';
+        
+        suggestionBox.style.cssText = `
+            position: fixed !important;
+            z-index: 2147483647 !important;
+            background: white !important;
+            border: 2px solid #4CAF50 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
+            padding: 16px !important;
+            min-width: 300px !important;
+            max-width: 420px !important;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            font-size: 14px !important;
+            line-height: 1.5 !important;
+            display: none !important;
+            color: #333 !important;
+        `;
+        
+        document.body.appendChild(suggestionBox);
+        console.log('✅ Suggestion box created');
+        
+        // Create underlines container
+        createUnderlinesContainer();
+    }
+
+    function createUnderlinesContainer() {
+        if (underlinesContainer) {
+            console.log('Underlines container already exists');
+            return;
+        }
+        
+        console.log('Creating underlines container...');
+        
+        underlinesContainer = document.createElement('div');
+        underlinesContainer.id = 'harper-lt-underlines';
+        underlinesContainer.style.cssText = `
+            position: absolute !important;
+            pointer-events: none !important;
+            z-index: 2147483646 !important;
+        `;
+        
+        document.body.appendChild(underlinesContainer);
+        console.log('✅ Underlines container created');
+    }
+
+    function clearUnderlines() {
+        if (underlinesContainer) {
+            underlinesContainer.innerHTML = '';
+        }
+    }
+
+    function drawUnderlines() {
+        if (!activeElement || !underlinesContainer) {
+            console.log('Cannot draw underlines: missing element or container');
+            return;
+        }
+        
+        clearUnderlines();
+        
+        if (currentIssues.length === 0) {
+            console.log('No issues to underline');
+            return;
+        }
+        
+        console.log('Drawing underlines for', currentIssues.length, 'issues');
+        
+        const elementRect = activeElement.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+        
+        // Get element's computed style
+        const computedStyle = window.getComputedStyle(activeElement);
+        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+        const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+        const fontSize = parseFloat(computedStyle.fontSize) || 14;
+        const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.5;
+        
+        currentIssues.forEach(issue => {
+            const color = getUnderlineColor(issue.type);
+            const offset = issue.offset || 0;
+            const length = issue.length || 0;
+            
+            if (!length) return;
+            
+            // Create underline element
+            const underline = document.createElement('div');
+            underline.className = 'harper-lt-underline';
+            underline.style.cssText = `
+                position: absolute !important;
+                height: 2px !important;
+                background: ${color} !important;
+                pointer-events: auto !important;
+                cursor: pointer !important;
+                border-radius: 1px !important;
+            `;
+            
+            // Calculate position (approximate - works for single line)
+            const charWidth = fontSize * 0.6; // Approximate character width
+            const left = elementRect.left + scrollLeft + paddingLeft + (offset * charWidth);
+            const top = elementRect.top + scrollTop + paddingTop + lineHeight - 2;
+            const width = length * charWidth;
+            
+            underline.style.left = left + 'px';
+            underline.style.top = top + 'px';
+            underline.style.width = width + 'px';
+            
+            // Add wavy effect
+            underline.style.backgroundImage = `linear-gradient(45deg, transparent 50%, ${color} 50%, ${color} 100%)`;
+            underline.style.backgroundSize = '4px 4px';
+            
+            // Click handler to show suggestion
+            underline.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                displayIssueSuggestions(issue);
+            };
+            
+            underlinesContainer.appendChild(underline);
+        });
+        
+        console.log('✅ Underlines drawn');
+    }
+
+    function getUnderlineColor(type) {
+        switch (type) {
+            case 'grammar':
+                return '#f44336'; // Red for grammar/spelling
+            case 'terminology':
+                return '#2196F3'; // Blue for terminology
+            case 'tone':
+                return '#4CAF50'; // Green for tone
+            default:
+                return '#FF9800'; // Orange for others
+        }
+    }
+
     function handleResults(results) {
         console.log('📊 Processing results...');
         console.log('Grammar:', results.grammar?.length || 0);
@@ -225,8 +380,7 @@
             }
         }
         
-        // Sort by priority (grammar first, then tone, then terminology)
-        // and then by position in text (offset)
+        // Sort by priority and position
         currentIssues.sort((a, b) => {
             if (a.priority !== b.priority) {
                 return a.priority - b.priority;
@@ -240,6 +394,9 @@
             tone: currentIssues.filter(i => i.type === 'tone').length,
             terminology: currentIssues.filter(i => i.type === 'terminology').length
         });
+        
+        // Draw underlines for all issues
+        drawUnderlines();
         
         if (currentIssues.length > 0 && activeElement) {
             console.log('🎯 Displaying first issue:', currentIssues[0].type);
@@ -318,6 +475,214 @@
         
         document.body.appendChild(suggestionBox);
         console.log('✅ Suggestion box created');
+        
+        // Create underlines container
+        createUnderlinesContainer();
+    }
+
+    function createUnderlinesContainer() {
+        if (underlinesContainer) {
+            console.log('Underlines container already exists');
+            return;
+        }
+        
+        console.log('Creating underlines container...');
+        
+        underlinesContainer = document.createElement('div');
+        underlinesContainer.id = 'harper-lt-underlines';
+        underlinesContainer.style.cssText = `
+            position: absolute !important;
+            pointer-events: none !important;
+            z-index: 2147483646 !important;
+        `;
+        
+        document.body.appendChild(underlinesContainer);
+        console.log('✅ Underlines container created');
+    }
+
+    function clearUnderlines() {
+        if (underlinesContainer) {
+            underlinesContainer.innerHTML = '';
+        }
+    }
+
+    function drawUnderlines() {
+        if (!activeElement || !underlinesContainer) {
+            console.log('Cannot draw underlines: missing element or container');
+            return;
+        }
+        
+        clearUnderlines();
+        
+        if (currentIssues.length === 0) {
+            console.log('No issues to underline');
+            return;
+        }
+        
+        console.log('Drawing underlines for', currentIssues.length, 'issues');
+        
+        const elementRect = activeElement.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+        
+        // Get element's computed style
+        const computedStyle = window.getComputedStyle(activeElement);
+        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
+        const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+        const fontSize = parseFloat(computedStyle.fontSize) || 14;
+        const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.5;
+        
+        currentIssues.forEach(issue => {
+            const color = getUnderlineColor(issue.type);
+            const offset = issue.offset || 0;
+            const length = issue.length || 0;
+            
+            if (!length) return;
+            
+            // Create underline element
+            const underline = document.createElement('div');
+            underline.className = 'harper-lt-underline';
+            underline.style.cssText = `
+                position: absolute !important;
+                height: 2px !important;
+                background: ${color} !important;
+                pointer-events: auto !important;
+                cursor: pointer !important;
+                border-radius: 1px !important;
+            `;
+            
+            // Calculate position (approximate - works for single line)
+            const charWidth = fontSize * 0.6; // Approximate character width
+            const left = elementRect.left + scrollLeft + paddingLeft + (offset * charWidth);
+            const top = elementRect.top + scrollTop + paddingTop + lineHeight - 2;
+            const width = length * charWidth;
+            
+            underline.style.left = left + 'px';
+            underline.style.top = top + 'px';
+            underline.style.width = width + 'px';
+            
+            // Add wavy effect
+            underline.style.backgroundImage = `linear-gradient(45deg, transparent 50%, ${color} 50%, ${color} 100%)`;
+            underline.style.backgroundSize = '4px 4px';
+            
+            // Click handler to show suggestion
+            underline.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                displayIssueSuggestions(issue);
+            };
+            
+            underlinesContainer.appendChild(underline);
+        });
+        
+        console.log('✅ Underlines drawn');
+    }
+
+    function getUnderlineColor(type) {
+        switch (type) {
+            case 'grammar':
+                return '#f44336'; // Red for grammar/spelling
+            case 'terminology':
+                return '#2196F3'; // Blue for terminology
+            case 'tone':
+                return '#4CAF50'; // Green for tone
+            default:
+                return '#FF9800'; // Orange for others
+        }
+    }
+
+    function handleResults(results) {
+        console.log('📊 Processing results...');
+        console.log('Grammar:', results.grammar?.length || 0);
+        console.log('Harper tone:', results.harper?.tone?.length || 0);
+        console.log('Harper terminology:', results.harper?.terminology?.length || 0);
+        
+        currentIssues = [];
+        
+        // Collect Grammar issues from LanguageTool FIRST (higher priority)
+        if (results.grammar && Array.isArray(results.grammar)) {
+            results.grammar.forEach(issue => {
+                currentIssues.push({ ...issue, type: 'grammar', priority: 1 });
+            });
+        }
+        
+        // Then add Harper issues
+        if (results.harper) {
+            if (results.harper.tone && Array.isArray(results.harper.tone)) {
+                results.harper.tone.forEach(issue => {
+                    currentIssues.push({ ...issue, type: 'tone', priority: 2 });
+                });
+            }
+            if (results.harper.terminology && Array.isArray(results.harper.terminology)) {
+                results.harper.terminology.forEach(issue => {
+                    currentIssues.push({ ...issue, type: 'terminology', priority: 3 });
+                });
+            }
+        }
+        
+        // Sort by priority and position
+        currentIssues.sort((a, b) => {
+            if (a.priority !== b.priority) {
+                return a.priority - b.priority;
+            }
+            return (a.offset || 0) - (b.offset || 0);
+        });
+        
+        console.log('✅ Total issues:', currentIssues.length);
+        console.log('Issues by type:', {
+            grammar: currentIssues.filter(i => i.type === 'grammar').length,
+            tone: currentIssues.filter(i => i.type === 'tone').length,
+            terminology: currentIssues.filter(i => i.type === 'terminology').length
+        });
+        
+        // Draw underlines for all issues
+        drawUnderlines();
+        
+        if (currentIssues.length > 0 && activeElement) {
+            console.log('🎯 Displaying first issue:', currentIssues[0].type);
+            displayIssueSuggestions(currentIssues[0]);
+        } else {
+            console.log('No issues to display');
+            hideSuggestionBox();
+        }
+    }
+
+    function displayIssueSuggestions(issue) {
+        console.log('💡 Displaying suggestions...');
+        
+        if (!activeElement) {
+            console.error('No active element');
+            return;
+        }
+        
+        const suggestions = getSuggestionsFromIssue(issue);
+        console.log('Suggestions:', suggestions);
+        
+        positionSuggestionBox(activeElement);
+        populateSuggestionBox(issue, suggestions);
+        showSuggestionBox();
+        
+        console.log('✅ Suggestion box shown');
+    }
+
+    function getSuggestionsFromIssue(issue) {
+        let suggestions = [];
+        
+        if (issue.replacements && Array.isArray(issue.replacements)) {
+            // ← LanguageTool provides "replacements" array
+            suggestions = issue.replacements.map(r => {
+                if (typeof r === 'string') return r;
+                return r.value || r;  // ← Getting suggestion from r.value
+            });
+        } else if (issue.suggestions && Array.isArray(issue.suggestions)) {
+            // ← Harper would provide "suggestions" array (not implemented)
+            suggestions = issue.suggestions.map(s => {
+                if (typeof s === 'string') return s;
+                return s.value || s;
+            });
+        }
+        
+        return suggestions.filter(s => s && s.trim());
     }
 
     function populateSuggestionBox(issue, suggestions) {
@@ -593,20 +958,17 @@
         let offset = 0;
         let length = 0;
         
-        // LanguageTool provides context with offset and length
         if (issue.context) {
             offset = issue.context.offset;
             length = issue.context.length;
             errorText = issue.context.text.substring(offset, offset + length);
             console.log('Error text from context:', errorText, 'at offset:', offset, 'length:', length);
         } else if (issue.offset !== undefined && issue.length !== undefined) {
-            // Direct offset and length
             offset = issue.offset;
             length = issue.length;
             errorText = fullText.substring(offset, offset + length);
             console.log('Error text from offset/length:', errorText);
         } else {
-            // Fallback: use the whole context text
             errorText = issue.text || issue.context?.text || '';
             console.log('Error text (fallback):', errorText);
         }
@@ -616,20 +978,16 @@
             return;
         }
         
-        // For LanguageTool with context offset, we need to find the actual position in full text
         let newText;
         if (issue.offset !== undefined && issue.length !== undefined) {
-            // We have absolute position in the text
             const beforeError = fullText.substring(0, issue.offset);
             const afterError = fullText.substring(issue.offset + issue.length);
             newText = beforeError + suggestion + afterError;
             console.log('Replacing using offset:', issue.offset, 'length:', issue.length);
         } else {
-            // Find and replace the first occurrence
             const errorIndex = fullText.indexOf(errorText);
             if (errorIndex === -1) {
                 console.error('Could not find error text in full text');
-                // Try partial match
                 const words = errorText.split(' ');
                 const firstWord = words[0];
                 const firstWordIndex = fullText.indexOf(firstWord);
@@ -652,7 +1010,6 @@
             const cursorPos = activeElement.selectionStart;
             activeElement.value = newText;
             activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-            // Restore cursor position
             if (cursorPos !== null) {
                 activeElement.setSelectionRange(cursorPos, cursorPos);
             }
@@ -665,6 +1022,9 @@
         hideSuggestionBox();
         
         currentIssues = currentIssues.filter(i => i !== issue);
+        
+        // Redraw underlines
+        drawUnderlines();
         
         if (currentIssues.length > 0) {
             setTimeout(() => displayIssueSuggestions(currentIssues[0]), 500);
@@ -687,140 +1047,3 @@
     }
 
 })();
-        void suggestionBox.offsetHeight;
-
-
-    function hideSuggestionBox() {
-        if (suggestionBox) {
-            console.log('Hiding suggestion box');
-            suggestionBox.style.display = 'none';
-        }
-    }
-
-    function applySuggestionToElement(suggestion, issue) {
-        console.log('Applying suggestion:', suggestion);
-        console.log('Issue details:', issue);
-        
-        if (!activeElement) {
-            console.error('No active element');
-            return;
-        }
-        
-        const fullText = getElementText(activeElement);
-        console.log('Full text:', fullText);
-        
-        // Get the actual error text and its position
-        let errorText = '';
-        let offset = 0;
-        let length = 0;
-        
-        // LanguageTool provides context with offset and length
-        if (issue.context) {
-            offset = issue.context.offset;
-            length = issue.context.length;
-            errorText = issue.context.text.substring(offset, offset + length);
-            console.log('Error text from context:', errorText, 'at offset:', offset, 'length:', length);
-        } else if (issue.offset !== undefined && issue.length !== undefined) {
-            // Direct offset and length
-            offset = issue.offset;
-            length = issue.length;
-            errorText = fullText.substring(offset, offset + length);
-            console.log('Error text from offset/length:', errorText);
-        } else {
-            // Fallback: use the whole context text
-            errorText = issue.text || issue.context?.text || '';
-            console.log('Error text (fallback):', errorText);
-        }
-        
-        if (!errorText) {
-            console.error('No error text found');
-            return;
-        }
-        
-        // For LanguageTool with context offset, we need to find the actual position in full text
-        let newText;
-        if (issue.offset !== undefined && issue.length !== undefined) {
-            // We have absolute position in the text
-            const beforeError = fullText.substring(0, issue.offset);
-            const afterError = fullText.substring(issue.offset + issue.length);
-            newText = beforeError + suggestion + afterError;
-            console.log('Replacing using offset:', issue.offset, 'length:', issue.length);
-        } else {
-            // Find and replace the first occurrence
-            const errorIndex = fullText.indexOf(errorText);
-            if (errorIndex === -1) {
-                console.error('Could not find error text in full text');
-                // Try partial match
-                const words = errorText.split(' ');
-                const firstWord = words[0];
-                const firstWordIndex = fullText.indexOf(firstWord);
-                if (firstWordIndex !== -1) {
-                    newText = fullText.substring(0, firstWordIndex) + suggestion + fullText.substring(firstWordIndex + errorText.length);
-                } else {
-                    return;
-                }
-            } else {
-                newText = fullText.substring(0, errorIndex) + suggestion + fullText.substring(errorIndex + errorText.length);
-                console.log('Replacing at index:', errorIndex);
-            }
-        }
-        
-        console.log('New text:', newText);
-        
-        const tagName = activeElement.tagName.toLowerCase();
-        
-        if (tagName === 'input' || tagName === 'textarea') {
-            const cursorPos = activeElement.selectionStart;
-            activeElement.value = newText;
-            activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-            // Restore cursor position
-            if (cursorPos !== null) {
-                activeElement.setSelectionRange(cursorPos, cursorPos);
-            }
-        } else if (activeElement.isContentEditable) {
-            activeElement.textContent = newText;
-            activeElement.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        
-        console.log('✅ Applied successfully');
-        hideSuggestionBox();
-        
-        currentIssues = currentIssues.filter(i => i !== issue);
-        
-        if (currentIssues.length > 0) {
-            setTimeout(() => displayIssueSuggestions(currentIssues[0]), 500);
-        }
-    }
-
-    function applySuggestion(payload) {
-        console.log('Apply suggestion from external source:', payload);
-        // Handle if needed
-    }
-
-    function showSuggestions(payload) {
-        console.log('Show suggestions from external source:', payload);
-        // Handle if needed
-    }
-
-    function escapeHtml(text) {
-        if (!text) return '';
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    // Test function - remove in production
-    window.testHarperLT = function() {
-        console.log('🧪 Testing Harper-LT');
-        console.log('Active element:', activeElement);
-        console.log('Suggestion box:', suggestionBox);
-        console.log('Current issues:', currentIssues);
-        
-        if (activeElement) {
-            const text = getElementText(activeElement);
-            console.log('Active element text:', text);
-        }
-    };
-    
-    console.log('✅ Content script fully loaded. Type window.testHarperLT() to test.');
-;
