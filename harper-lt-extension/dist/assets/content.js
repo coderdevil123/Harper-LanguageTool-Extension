@@ -68,8 +68,52 @@
             return "Harper-LT is working!";
         };
         
+        // Add Google Docs debug function
+        window.debugGoogleDocs = function() {
+            console.log("🔍 GOOGLE DOCS DEBUG");
+            console.log("==================");
+            
+            const selectors = {
+                'Word nodes (.kix-wordhtmlgenerator-word-node)': '.kix-wordhtmlgenerator-word-node',
+                'Lineview blocks (.kix-lineview-text-block)': '.kix-lineview-text-block',
+                'Paragraph spans (.kix-paragraphrenderer span)': '.kix-paragraphrenderer span',
+                'Editor area (.kix-appview-editor)': '.kix-appview-editor',
+                'Textbox role ([role="textbox"])': '[role="textbox"]',
+                'All spans in editor (.kix-appview-editor span)': '.kix-appview-editor span',
+                'Page canvas (.kix-page)': '.kix-page',
+                'Cursor (.kix-cursor)': '.kix-cursor'
+            };
+            
+            for (const [name, selector] of Object.entries(selectors)) {
+                const elements = document.querySelectorAll(selector);
+                console.log(`${name}: ${elements.length} found`);
+                if (elements.length > 0 && elements.length < 5) {
+                    elements.forEach((el, i) => {
+                        console.log(`  [${i}]:`, el.textContent?.substring(0, 50) || '(no text)');
+                    });
+                }
+            }
+            
+            // Try to get ANY text
+            console.log("\n📝 EXTRACTION ATTEMPTS:");
+            const editor = document.querySelector('.kix-appview-editor');
+            if (editor) {
+                console.log("Editor innerText:", editor.innerText?.substring(0, 100));
+                console.log("Editor textContent:", editor.textContent?.substring(0, 100));
+            }
+            
+            // Show the structure
+            console.log("\n🏗️ DOM STRUCTURE:");
+            const container = document.querySelector('.kix-appview-editor') || document.body;
+            console.log("Container:", container.className);
+            console.log("Children:", container.children.length);
+            
+            return "Debug complete - check console";
+        };
+        
         console.log("✅ Harper-LT initialized successfully!");
         console.log("💡 Type window.testHarperLT() to test");
+        console.log("💡 Type window.debugGoogleDocs() to debug Google Docs");
     }
 
     function autoAnalyzeExistingText() {
@@ -79,94 +123,98 @@
         if (window.location.hostname === 'docs.google.com') {
             console.log('📝 Google Docs detected!');
             
-            // Longer delay for Google Docs to fully load
+            // Wait longer for Google Docs to fully load
             setTimeout(() => {
-                // Extract all text from Google Docs directly from the DOM
-                const textBlocks = document.querySelectorAll('.kix-lineview-text-block');
+                console.log('🔍 Attempting to read Google Docs content...');
                 
-                if (textBlocks.length > 0) {
-                    console.log(`✅ Found ${textBlocks.length} text blocks in Google Docs`);
-                    googleDocsRetryCount = 0; // Reset retry counter
-                    
-                    // Get all text
-                    const fullText = Array.from(textBlocks)
-                        .map(block => block.textContent || block.innerText || '')
-                        .filter(text => text.trim().length > 0)
-                        .join(' ');
-                    
-                    console.log('📝 Extracted text length:', fullText.length);
-                    console.log('📝 Text preview:', fullText.substring(0, 100));
-                    
-                    if (fullText && fullText.trim().length > 5) {
-                        // Use the page container as active element
-                        activeElement = document.querySelector('.kix-page') || document.body;
-                        
-                        // Analyze the text
-                        analyzeGoogleDocsText(fullText);
-                        
-                        // Set up monitoring for changes
-                        const pageContainer = document.querySelector('.kix-appview-editor-container, body');
-                        if (pageContainer) {
-                            let lastText = fullText;
-                            
-                            const observer = new MutationObserver(() => {
-                                clearTimeout(debounceTimer);
-                                debounceTimer = setTimeout(() => {
-                                    const newBlocks = document.querySelectorAll('.kix-lineview-text-block');
-                                    const newText = Array.from(newBlocks)
-                                        .map(block => block.textContent || block.innerText || '')
-                                        .filter(text => text.trim().length > 0)
-                                        .join(' ');
-                                    
-                                    if (newText && newText.trim().length > 5 && newText !== lastText) {
-                                        console.log('📝 Google Docs text changed, re-analyzing...');
-                                        lastText = newText;
-                                        analyzeGoogleDocsText(newText);
-                                    }
-                                }, 2000);
-                            });
-                            
-                            observer.observe(pageContainer, {
-                                childList: true,
-                                subtree: true,
-                                characterData: true
-                            });
-                            
-                            console.log('✅ Monitoring Google Docs for changes');
-                        }
-                    } else {
-                        console.warn('⚠️ No text found in Google Docs');
-                    }
-                } else {
-                    googleDocsRetryCount++;
-                    
-                    if (googleDocsRetryCount < MAX_GOOGLE_DOCS_RETRIES) {
-                        console.warn(`⚠️ Google Docs not fully loaded yet, retrying (${googleDocsRetryCount}/${MAX_GOOGLE_DOCS_RETRIES})...`);
-                        setTimeout(autoAnalyzeExistingText, 3000);
-                    } else {
-                        console.error('❌ Google Docs failed to load after maximum retries');
-                        console.log('💡 You can manually trigger analysis by typing in the document');
-                        
-                        // Set up a listener for any keyboard activity
-                        document.addEventListener('keyup', function handleFirstKeypress() {
-                            console.log('⌨️ Keyboard activity detected, attempting analysis...');
-                            setTimeout(() => {
-                                const blocks = document.querySelectorAll('.kix-lineview-text-block');
-                                if (blocks.length > 0) {
-                                    const text = Array.from(blocks)
-                                        .map(b => b.textContent || '')
-                                        .join(' ');
-                                    if (text.trim().length > 5) {
-                                        activeElement = document.querySelector('.kix-page') || document.body;
-                                        analyzeGoogleDocsText(text);
-                                        document.removeEventListener('keyup', handleFirstKeypress);
-                                    }
-                                }
-                            }, 1000);
-                        }, { once: false });
+                // Try multiple methods to extract text from Google Docs
+                let fullText = '';
+                let method = 'none';
+                
+                // Method 1: Try word nodes
+                let wordNodes = document.querySelectorAll('.kix-wordhtmlgenerator-word-node');
+                if (wordNodes.length > 0) {
+                    fullText = Array.from(wordNodes).map(n => n.textContent).join('');
+                    method = 'word-nodes';
+                }
+                
+                // Method 2: Try lineview blocks
+                if (!fullText) {
+                    let lineBlocks = document.querySelectorAll('.kix-lineview-text-block');
+                    if (lineBlocks.length > 0) {
+                        fullText = Array.from(lineBlocks).map(b => b.textContent).join(' ');
+                        method = 'lineview-blocks';
                     }
                 }
-            }, 5000); // Wait 5 seconds for Google Docs to load
+                
+                // Method 3: Try paragraph spans
+                if (!fullText) {
+                    let paragraphs = document.querySelectorAll('.kix-paragraphrenderer span');
+                    if (paragraphs.length > 0) {
+                        fullText = Array.from(paragraphs).map(p => p.textContent).filter(t => t.trim()).join(' ');
+                        method = 'paragraph-spans';
+                    }
+                }
+                
+                // Method 4: Try ANY text content in the editor area
+                if (!fullText) {
+                    let editorArea = document.querySelector('.kix-appview-editor') || 
+                                    document.querySelector('.kix-page-paginated') ||
+                                    document.querySelector('[role="textbox"]');
+                    if (editorArea) {
+                        fullText = editorArea.innerText || editorArea.textContent || '';
+                        method = 'editor-innerText';
+                    }
+                }
+                
+                // Method 5: Manual DOM inspection
+                if (!fullText) {
+                    console.log('🔍 Trying manual DOM inspection...');
+                    let allSpans = document.querySelectorAll('.kix-appview-editor span');
+                    console.log(`Found ${allSpans.length} spans in editor area`);
+                    
+                    let textParts = [];
+                    allSpans.forEach(span => {
+                        if (span.textContent && span.textContent.trim()) {
+                            textParts.push(span.textContent);
+                        }
+                    });
+                    fullText = textParts.join('');
+                    method = 'all-spans';
+                }
+                
+                console.log(`📊 Extraction method: ${method}`);
+                console.log(`📝 Extracted text length: ${fullText.length}`);
+                console.log(`📝 Text preview: "${fullText.substring(0, 150)}"`);
+                
+                if (fullText && fullText.trim().length > 5) {
+                    console.log('✅ Successfully extracted Google Docs text');
+                    googleDocsRetryCount = 0;
+                    
+                    // Set active element
+                    activeElement = document.querySelector('.kix-appview-editor') || 
+                                   document.querySelector('[role="textbox"]') ||
+                                   document.body;
+                    
+                    console.log('🎯 Active element:', activeElement.className || activeElement.tagName);
+                    
+                    // Analyze the text
+                    analyzeGoogleDocsText(fullText);
+                    
+                    // Set up observer
+                    setupGoogleDocsObserver(method);
+                } else {
+                    // Log what we found for debugging
+                    console.log('❌ Could not extract text. Debugging info:');
+                    console.log('Word nodes:', document.querySelectorAll('.kix-wordhtmlgenerator-word-node').length);
+                    console.log('Lineview blocks:', document.querySelectorAll('.kix-lineview-text-block').length);
+                    console.log('Paragraph spans:', document.querySelectorAll('.kix-paragraphrenderer span').length);
+                    console.log('Editor area exists:', !!document.querySelector('.kix-appview-editor'));
+                    console.log('Textbox role:', !!document.querySelector('[role="textbox"]'));
+                    
+                    retryGoogleDocsLoad();
+                }
+            }, 10000); // Wait 10 seconds
             
             return;
         }
@@ -182,6 +230,135 @@
                 analyzeText(element);
             }
         });
+    }
+
+    function retryGoogleDocsLoad() {
+        googleDocsRetryCount++;
+        
+        if (googleDocsRetryCount < MAX_GOOGLE_DOCS_RETRIES) {
+            console.warn(`⚠️ Retry ${googleDocsRetryCount}/${MAX_GOOGLE_DOCS_RETRIES} - waiting 5 more seconds...`);
+            setTimeout(autoAnalyzeExistingText, 5000);
+        } else {
+            console.error('❌ Could not load Google Docs text automatically');
+            console.log('💡 MANUAL ACTIVATION: Click in the document and press Ctrl+A, then start typing');
+            
+            // More aggressive keyboard listener
+            let activationAttempts = 0;
+            const MAX_ACTIVATION_ATTEMPTS = 10;
+            
+            const tryActivate = () => {
+                activationAttempts++;
+                console.log(`⌨️ Activation attempt ${activationAttempts}...`);
+                
+                setTimeout(() => {
+                    // Try all extraction methods
+                    let text = '';
+                    
+                    const methods = [
+                        () => Array.from(document.querySelectorAll('.kix-wordhtmlgenerator-word-node')).map(n => n.textContent).join(''),
+                        () => Array.from(document.querySelectorAll('.kix-lineview-text-block')).map(b => b.textContent).join(' '),
+                        () => Array.from(document.querySelectorAll('.kix-paragraphrenderer span')).map(p => p.textContent).filter(t => t.trim()).join(' '),
+                        () => {
+                            const editor = document.querySelector('.kix-appview-editor') || document.querySelector('[role="textbox"]');
+                            return editor ? (editor.innerText || editor.textContent || '') : '';
+                        },
+                        () => Array.from(document.querySelectorAll('.kix-appview-editor span')).map(s => s.textContent).filter(t => t.trim()).join('')
+                    ];
+                    
+                    for (const method of methods) {
+                        try {
+                            text = method();
+                            if (text && text.trim().length > 5) {
+                                console.log('✅ Text extracted:', text.substring(0, 100));
+                                break;
+                            }
+                        } catch (e) {
+                            console.log('Method failed:', e.message);
+                        }
+                    }
+                    
+                    if (text.trim().length > 5) {
+                        console.log('🎉 SUCCESS! Google Docs text found after keypress');
+                        activeElement = document.querySelector('.kix-appview-editor') || 
+                                       document.querySelector('[role="textbox"]') || 
+                                       document.body;
+                        analyzeGoogleDocsText(text);
+                        setupGoogleDocsObserver('fallback');
+                        
+                        // Remove listener
+                        document.removeEventListener('keyup', tryActivate);
+                        document.removeEventListener('click', tryActivate);
+                    } else if (activationAttempts < MAX_ACTIVATION_ATTEMPTS) {
+                        console.log('⚠️ No text yet, will try again on next keypress');
+                    } else {
+                        console.error('❌ Gave up after', MAX_ACTIVATION_ATTEMPTS, 'attempts');
+                        document.removeEventListener('keyup', tryActivate);
+                        document.removeEventListener('click', tryActivate);
+                    }
+                }, 1000);
+            };
+            
+            document.addEventListener('keyup', tryActivate);
+            document.addEventListener('click', tryActivate);
+            console.log('👂 Listening for keyboard/mouse activity...');
+        }
+    }
+
+    function setupGoogleDocsObserver(extractionMethod) {
+        const editorContainer = document.querySelector('.kix-appview-editor-container') || 
+                               document.querySelector('.kix-appview-editor') ||
+                               document.querySelector('.kix-page-paginated') ||
+                               document.body;
+        
+        console.log('🔭 Observer watching:', editorContainer.className || editorContainer.tagName);
+        console.log('🔭 Using extraction method:', extractionMethod);
+        
+        let lastText = '';
+        
+        const observer = new MutationObserver(() => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                // Re-extract using the same method that worked
+                let newText = '';
+                
+                try {
+                    switch(extractionMethod) {
+                        case 'word-nodes':
+                            newText = Array.from(document.querySelectorAll('.kix-wordhtmlgenerator-word-node')).map(n => n.textContent).join('');
+                            break;
+                        case 'lineview-blocks':
+                            newText = Array.from(document.querySelectorAll('.kix-lineview-text-block')).map(b => b.textContent).join(' ');
+                            break;
+                        case 'paragraph-spans':
+                            newText = Array.from(document.querySelectorAll('.kix-paragraphrenderer span')).map(p => p.textContent).filter(t => t.trim()).join(' ');
+                            break;
+                        case 'editor-innerText':
+                            const editor = document.querySelector('.kix-appview-editor') || document.querySelector('[role="textbox"]');
+                            newText = editor ? (editor.innerText || editor.textContent || '') : '';
+                            break;
+                        default:
+                            newText = Array.from(document.querySelectorAll('.kix-appview-editor span')).map(s => s.textContent).filter(t => t.trim()).join('');
+                    }
+                } catch (e) {
+                    console.error('Observer extraction error:', e);
+                }
+                
+                if (newText && newText.trim().length > 5 && newText !== lastText) {
+                    console.log('📝 Content changed in Google Docs');
+                    console.log('📝 New length:', newText.length);
+                    lastText = newText;
+                    analyzeGoogleDocsText(newText);
+                }
+            }, 3000);
+        });
+        
+        observer.observe(editorContainer, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+        
+        console.log('✅ Observer active');
     }
 
     function analyzeGoogleDocsText(text) {
@@ -782,6 +959,59 @@
         }
     }
 
+    function positionSuggestionBox(element) {
+        if (!suggestionBox || !element) return;
+        
+        const rect = element.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+        
+        // Get viewport dimensions
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        // Suggestion box dimensions (approximate)
+        const boxWidth = 420;
+        const boxHeight = 300; // estimated
+        
+        // Start with position below the element
+        let top = rect.bottom + scrollTop + 10;
+        let left = rect.left + scrollLeft;
+        
+        // Adjust horizontal position if box would go off-screen
+        if (left + boxWidth > viewportWidth + scrollLeft) {
+            // Align to right edge of viewport
+            left = viewportWidth + scrollLeft - boxWidth - 20;
+        }
+        
+        // If too far left, align to left edge
+        if (left < scrollLeft + 10) {
+            left = scrollLeft + 10;
+        }
+        
+        // Adjust vertical position if box would go off-screen
+        if (top + boxHeight > viewportHeight + scrollTop) {
+            // Position above the element instead
+            top = rect.top + scrollTop - boxHeight - 10;
+            
+            // If still off-screen, position at top of viewport
+            if (top < scrollTop + 10) {
+                top = scrollTop + 10;
+            }
+        }
+        
+        // Ensure it's within viewport
+        if (top < scrollTop) {
+            top = scrollTop + 10;
+        }
+        
+        suggestionBox.style.top = top + 'px';
+        suggestionBox.style.left = left + 'px';
+        
+        console.log(`📍 Box positioned at: top=${top}px, left=${left}px`);
+        console.log(`📍 Element rect: top=${rect.top}, bottom=${rect.bottom}, left=${rect.left}`);
+    }
+
     function displayIssueSuggestions(issue) {
         console.log('💡 Displaying suggestions...');
         
@@ -793,11 +1023,94 @@
         const suggestions = getSuggestionsFromIssue(issue);
         console.log('Suggestions:', suggestions);
         
-        positionSuggestionBox(activeElement);
+        // For better positioning, try to find the actual error location
+        let positionElement = activeElement;
+        
+        // If we can find the exact text position, use that
+        if (issue.offset !== undefined && issue.length !== undefined) {
+            try {
+                const text = getElementText(activeElement);
+                const errorText = text.substring(issue.offset, issue.offset + issue.length);
+                
+                // For contenteditable or textareas, try to get exact position
+                const tagName = activeElement.tagName?.toLowerCase();
+                
+                if (activeElement.isContentEditable) {
+                    // Find the text node containing the error
+                    const range = findRangeForOffset(activeElement, issue.offset, issue.length);
+                    if (range) {
+                        const rects = range.getClientRects();
+                        if (rects.length > 0) {
+                            // Create a temporary element at the error position
+                            const tempDiv = document.createElement('div');
+                            tempDiv.style.cssText = `
+                                position: absolute;
+                                left: ${rects[0].left}px;
+                                top: ${rects[0].top}px;
+                                width: ${rects[0].width}px;
+                                height: ${rects[0].height}px;
+                            `;
+                            positionElement = tempDiv;
+                            document.body.appendChild(tempDiv);
+                            
+                            positionSuggestionBox(positionElement);
+                            populateSuggestionBox(issue, suggestions);
+                            showSuggestionBox();
+                            
+                            // Remove temp element after positioning
+                            setTimeout(() => tempDiv.remove(), 100);
+                            
+                            console.log('✅ Suggestion box positioned at error location');
+                            return;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Could not find exact error position:', e);
+            }
+        }
+        
+        // Default positioning near the element
+        positionSuggestionBox(positionElement);
         populateSuggestionBox(issue, suggestions);
         showSuggestionBox();
         
         console.log('✅ Suggestion box shown');
+    }
+
+    function findRangeForOffset(element, offset, length) {
+        try {
+            const walker = document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+            
+            let currentOffset = 0;
+            
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const nodeLength = node.textContent.length;
+                
+                if (currentOffset + nodeLength > offset) {
+                    const range = document.createRange();
+                    const startOffset = offset - currentOffset;
+                    const endOffset = Math.min(startOffset + length, nodeLength);
+                    
+                    range.setStart(node, startOffset);
+                    range.setEnd(node, endOffset);
+                    
+                    return range;
+                }
+                
+                currentOffset += nodeLength;
+            }
+        } catch (e) {
+            console.error('Error finding range:', e);
+        }
+        
+        return null;
     }
 
     function getSuggestionsFromIssue(issue) {
@@ -1041,22 +1354,6 @@
 
     function getIssueTypeLabel(type) {
         return type === 'grammar' ? 'Grammar Issue' : type === 'tone' ? 'Tone' : 'Terminology';
-    }
-
-    function positionSuggestionBox(element) {
-        if (!suggestionBox || !element) return;
-        
-        const rect = element.getBoundingClientRect();
-        let top = rect.bottom + 10;
-        let left = rect.left;
-        
-        if (left + 350 > window.innerWidth) {
-            left = window.innerWidth - 370;
-        }
-        if (left < 10) left = 10;
-        
-        suggestionBox.style.top = top + 'px';
-        suggestionBox.style.left = left + 'px';
     }
 
     function showSuggestionBox() {
