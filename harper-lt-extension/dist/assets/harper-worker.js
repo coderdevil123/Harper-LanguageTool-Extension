@@ -1,80 +1,80 @@
-// Harper WASM Worker
-console.log('Harper Worker initialized');
+// Harper Web Worker - handles WASM processing
 
-let harperInstance = null;
+let harperWasm = null;
+let harperInitialized = false;
 
-// Initialize Harper (placeholder - will be replaced with actual WASM)
+// Initialize Harper WASM
 async function initHarper() {
     try {
-        // TODO: Replace with actual Harper WASM initialization
-        // For now, we'll simulate Harper with basic checks
-        console.log('Harper initialized (simulation mode)');
-        harperInstance = true;
+        console.log('🎨 Worker: Initializing Harper WASM...');
+        
+        // Import Harper module (Web Workers support import!)
+        const harperModule = await import('./harper.js');
+        
+        // Initialize WASM
+        await harperModule.default();
+        
+        // Store the module
+        harperWasm = harperModule;
+        harperInitialized = true;
+        
+        console.log('✅ Worker: Harper WASM loaded successfully!');
         return true;
     } catch (error) {
-        console.error('Failed to initialize Harper:', error);
+        console.error('❌ Worker: Failed to load Harper:', error);
         return false;
     }
 }
 
-// Analyze text with Harper
-function analyzeWithHarper(text) {
-    if (!harperInstance) {
-        return { tone: [], terminology: [] };
-    }
-    
-    // Simulate Harper analysis
-    const tone = [];
-    const terminology = [];
-    
-    // Basic tone detection (placeholder)
-    if (text.match(/\b(very|really|extremely)\b/gi)) {
-        const matches = text.matchAll(/\b(very|really|extremely)\b/gi);
-        for (const match of matches) {
-            tone.push({
-                message: "Consider using a more precise word instead of intensifiers",
-                offset: match.index,
-                length: match[0].length,
-                text: match[0],
-                suggestions: ["considerably", "significantly"],
-                type: 'tone'
-            });
-        }
-    }
-    
-    // Basic terminology check (placeholder)
-    const informalWords = {
-        'gonna': 'going to',
-        'wanna': 'want to',
-        'gotta': 'have to',
-        'kinda': 'kind of',
-        'sorta': 'sort of'
-    };
-    
-    for (const [informal, formal] of Object.entries(informalWords)) {
-        const regex = new RegExp(`\\b${informal}\\b`, 'gi');
-        const matches = text.matchAll(regex);
-        for (const match of matches) {
-            terminology.push({
-                message: `Consider using "${formal}" instead of informal "${informal}"`,
-                offset: match.index,
-                length: match[0].length,
-                text: match[0],
-                suggestions: [formal],
-                type: 'terminology'
-            });
-        }
-    }
-    
-    return { tone, terminology };
-}
+// Initialize on worker start
+initHarper();
 
-// Listen for messages
+// Listen for messages from main thread
 self.onmessage = async function(e) {
-    const { type, text } = e.data;
+    const { type, text, id } = e.data;
     
-    if (type === 'INIT') {
-        const success = await initHarper();
+    if (type === 'LINT') {
+        if (!harperInitialized) {
+            // Wait for initialization
+            await new Promise(resolve => {
+                const checkInit = setInterval(() => {
+                    if (harperInitialized) {
+                        clearInterval(checkInit);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+        
+        try {
+            // Use Harper to lint the text
+            let lints = [];
+            
+            if (typeof harperWasm.lint === 'function') {
+                lints = harperWasm.lint(text);
+            } else if (typeof harperWasm.check === 'function') {
+                lints = harperWasm.check(text);
+            }
+            
+            console.log(`✅ Worker: Found ${lints?.length || 0} lints`);
+            
+            // Send results back
+            self.postMessage({
+                id: id,
+                success: true,
+                lints: lints || []
+            });
+            
+        } catch (error) {
+            console.error('❌ Worker: Lint error:', error);
+            self.postMessage({
+                id: id,
+                success: false,
+                error: error.message
+            });
+        }
+    }
+};
         self.postMessage({ type: 'INIT_COMPLETE', success });
     } else if (type === 'ANALYZE') {
         const results = analyzeWithHarper(text);

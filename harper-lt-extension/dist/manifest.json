@@ -12,7 +12,6 @@
   "permissions": ["storage", "activeTab"],
   
   "host_permissions": [
-    "http://10.10.10.36:8081/*",
     "<all_urls>"
   ],
 
@@ -22,7 +21,8 @@
   },
 
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
 
   "content_scripts": [
@@ -32,5 +32,19 @@
       "run_at": "document_end",
       "all_frames": true
     }
-  ]
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/*.wasm",
+        "assets/*.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
 }

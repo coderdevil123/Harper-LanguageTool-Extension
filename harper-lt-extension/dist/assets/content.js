@@ -13,6 +13,17 @@
     let googleDocsRetryCount = 0;
     const MAX_GOOGLE_DOCS_RETRIES = 5;
 
+    // Document analyzer state
+    let documentAnalysisState = {
+        isAnalyzing: false,
+        currentChunk: 0,
+        totalChunks: 0,
+        chunkSize: 100, // words per chunk
+        chunks: [],
+        fullText: '',
+        element: null
+    };
+
     // Initialize immediately
     initialize();
 
@@ -1216,186 +1227,188 @@
         const currentIndex = currentIssues.indexOf(issue) + 1;
         const totalIssues = currentIssues.length;
         
-        let html = `
-            <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #f0f0f0;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <div style="font-weight: 700; color: #2c3e50; font-size: 15px;">
-                        ${getIssueIcon(issue.type)} ${getIssueTypeLabel(issue.type)}
-                    </div>
-                    <div style="font-size: 12px; color: #999; font-weight: 600;">
-                        ${currentIndex} / ${totalIssues}
-                    </div>
+        // Create container
+        const container = document.createElement('div');
+        container.style.cssText = 'padding: 0; margin: 0;';
+        
+        // Header
+        const header = document.createElement('div');
+        header.style.cssText = 'margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #f0f0f0;';
+        header.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <div style="font-weight: 700; color: #2c3e50; font-size: 15px;">
+                    ${getIssueIcon(issue.type)} ${getIssueTypeLabel(issue.type)}
                 </div>
-                <div style="color: #555; font-size: 13px; margin-bottom: 10px;">
-                    ${escapeHtml(issueMessage)}
+                <div style="font-size: 12px; color: #999; font-weight: 600;">
+                    ${currentIndex} / ${totalIssues}
                 </div>
-                <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size: 13px; margin-bottom: 8px;">
-                    <strong>Error:</strong> <span style="background: #ffe082; padding: 2px 4px; border-radius: 3px; font-weight: 600;">${escapeHtml(errorText)}</span>
-                </div>
+            </div>
+            <div style="color: #555; font-size: 13px; margin-bottom: 10px;">
+                ${escapeHtml(issueMessage)}
+            </div>
+            <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size: 13px; margin-bottom: 8px;">
+                <strong>Error:</strong> <span style="background: #ffe082; padding: 2px 4px; border-radius: 3px; font-weight: 600;">${escapeHtml(errorText)}</span>
+            </div>
         `;
         
         if (contextText && contextText !== errorText) {
-            html += `
-                <div style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; color: #666; font-style: italic;">
-                    Context: "${escapeHtml(contextText)}"
-                </div>
-            `;
+            const contextDiv = document.createElement('div');
+            contextDiv.style.cssText = 'background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; color: #666; font-style: italic;';
+            contextDiv.textContent = `Context: "${contextText}"`;
+            header.appendChild(contextDiv);
         }
         
-        html += '</div>';
+        container.appendChild(header);
         
+        // Suggestions
         if (suggestions && suggestions.length > 0) {
-            html += '<div style="margin-top: 12px;"><div style="color: #666; font-size: 12px; font-weight: 600; margin-bottom: 8px;">SUGGESTIONS:</div>';
+            const suggestionsDiv = document.createElement('div');
+            suggestionsDiv.style.cssText = 'margin-top: 12px;';
+            
+            const sugTitle = document.createElement('div');
+            sugTitle.style.cssText = 'color: #666; font-size: 12px; font-weight: 600; margin-bottom: 8px;';
+            sugTitle.textContent = 'SUGGESTIONS:';
+            suggestionsDiv.appendChild(sugTitle);
             
             suggestions.slice(0, 5).forEach((suggestion, index) => {
-                html += `
-                    <button 
-                        class="harper-sug-btn" 
-                        data-index="${index}"
-                        data-suggestion="${escapeHtml(suggestion)}"
-                        style="
-                            display: block !important;
-                            width: 100% !important;
-                            padding: 10px 14px !important;
-                            margin-bottom: 6px !important;
-                            background: #f8f9fa !important;
-                            border: 1px solid #dee2e6 !important;
-                            border-radius: 6px !important;
-                            color: #212529 !important;
-                            cursor: pointer !important;
-                            text-align: left !important;
-                            font-size: 14px !important;
-                            transition: all 0.2s !important;
-                        "
-                    >
-                        ${escapeHtml(suggestion)}
-                    </button>
-                `;
-            });
-            html += '</div>';
-        } else {
-            html += '<div style="color: #999; font-style: italic; margin-top: 12px;">No suggestions</div>';
-        }
-        
-        // Add navigation buttons if there are multiple issues
-        if (totalIssues > 1) {
-            html += `
-                <div style="display: flex; gap: 8px; margin-top: 12px;">
-                    <button 
-                        id="harper-prev"
-                        style="
-                            flex: 1 !important;
-                            padding: 8px !important;
-                            background: #e3f2fd !important;
-                            border: 1px solid #2196F3 !important;
-                            border-radius: 6px !important;
-                            color: #1976D2 !important;
-                            cursor: pointer !important;
-                            font-size: 13px !important;
-                            font-weight: 600 !important;
-                        "
-                        ${currentIndex === 1 ? 'disabled style="opacity: 0.5; cursor: not-allowed !important;"' : ''}
-                    >
-                        ← Previous
-                    </button>
-                    <button 
-                        id="harper-next"
-                        style="
-                            flex: 1 !important;
-                            padding: 8px !important;
-                            background: #e3f2fd !important;
-                            border: 1px solid #2196F3 !important;
-                            border-radius: 6px !important;
-                            color: #1976D2 !important;
-                            cursor: pointer !important;
-                            font-size: 13px !important;
-                            font-weight: 600 !important;
-                        "
-                        ${currentIndex === totalIssues ? 'disabled style="opacity: 0.5; cursor: not-allowed !important;"' : ''}
-                    >
-                        Next →
-                    </button>
-                </div>
-            `;
-        }
-        
-        html += `
-            <button 
-                id="harper-dismiss"
-                style="
+                const btn = document.createElement('button');
+                btn.className = 'harper-sug-btn';
+                btn.setAttribute('data-suggestion', suggestion);
+                btn.style.cssText = `
                     display: block !important;
                     width: 100% !important;
-                    padding: 8px !important;
-                    margin-top: 12px !important;
-                    background: transparent !important;
-                    border: 1px solid #ddd !important;
+                    padding: 10px 14px !important;
+                    margin-bottom: 6px !important;
+                    background: #f8f9fa !important;
+                    border: 1px solid #dee2e6 !important;
                     border-radius: 6px !important;
-                    color: #666 !important;
+                    color: #212529 !important;
                     cursor: pointer !important;
-                    font-size: 13px !important;
-                "
-            >
-                Dismiss All
-            </button>
+                    text-align: left !important;
+                    font-size: 14px !important;
+                    transition: all 0.2s !important;
+                `;
+                btn.textContent = suggestion;
+                
+                // Add event listener (not inline onclick)
+                btn.addEventListener('click', () => {
+                    console.log('Applying:', suggestion);
+                    applySuggestionToElement(suggestion, issue);
+                });
+                
+                btn.addEventListener('mouseenter', function() {
+                    this.style.background = '#e3f2fd';
+                    this.style.borderColor = '#2196F3';
+                });
+                
+                btn.addEventListener('mouseleave', function() {
+                    this.style.background = '#f8f9fa';
+                    this.style.borderColor = '#dee2e6';
+                });
+                
+                suggestionsDiv.appendChild(btn);
+            });
+            
+            container.appendChild(suggestionsDiv);
+        } else {
+            const noSug = document.createElement('div');
+            noSug.style.cssText = 'color: #999; font-style: italic; margin-top: 12px;';
+            noSug.textContent = 'No suggestions available';
+            container.appendChild(noSug);
+        }
+        
+        // Navigation buttons (if multiple issues)
+        if (totalIssues > 1) {
+            const navDiv = document.createElement('div');
+            navDiv.style.cssText = 'display: flex; gap: 8px; margin-top: 12px;';
+            
+            const prevBtn = document.createElement('button');
+            prevBtn.textContent = '← Previous';
+            prevBtn.style.cssText = `
+                flex: 1 !important;
+                padding: 8px !important;
+                background: #e3f2fd !important;
+                border: 1px solid #2196F3 !important;
+                border-radius: 6px !important;
+                color: #1976D2 !important;
+                cursor: pointer !important;
+                font-size: 13px !important;
+                font-weight: 600 !important;
+            `;
+            
+            if (currentIndex === 1) {
+                prevBtn.disabled = true;
+                prevBtn.style.opacity = '0.5';
+                prevBtn.style.cursor = 'not-allowed';
+            } else {
+                prevBtn.addEventListener('click', () => {
+                    displayIssueSuggestions(currentIssues[currentIndex - 2]);
+                });
+            }
+            
+            const nextBtn = document.createElement('button');
+            nextBtn.textContent = 'Next →';
+            nextBtn.style.cssText = `
+                flex: 1 !important;
+                padding: 8px !important;
+                background: #e3f2fd !important;
+                border: 1px solid #2196F3 !important;
+                border-radius: 6px !important;
+                color: #1976D2 !important;
+                cursor: pointer !important;
+                font-size: 13px !important;
+                font-weight: 600 !important;
+            `;
+            
+            if (currentIndex === totalIssues) {
+                nextBtn.disabled = true;
+                nextBtn.style.opacity = '0.5';
+                nextBtn.style.cursor = 'not-allowed';
+            } else {
+                nextBtn.addEventListener('click', () => {
+                    displayIssueSuggestions(currentIssues[currentIndex]);
+                });
+            }
+            
+            navDiv.appendChild(prevBtn);
+            navDiv.appendChild(nextBtn);
+            container.appendChild(navDiv);
+        }
+        
+        // Dismiss button
+        const dismissBtn = document.createElement('button');
+        dismissBtn.textContent = 'Dismiss All';
+        dismissBtn.style.cssText = `
+            display: block !important;
+            width: 100% !important;
+            padding: 8px !important;
+            margin-top: 12px !important;
+            background: transparent !important;
+            border: 1px solid #ddd !important;
+            border-radius: 6px !important;
+            color: #666 !important;
+            cursor: pointer !important;
+            font-size: 13px !important;
         `;
         
-        suggestionBox.innerHTML = html;
-        
-        // Add click handlers
-        const suggestionButtons = suggestionBox.querySelectorAll('.harper-sug-btn');
-        suggestionButtons.forEach(btn => {
-            btn.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                const sug = this.getAttribute('data-suggestion');
-                console.log('Applying:', sug);
-                applySuggestionToElement(sug, issue);
-            };
-            btn.onmouseenter = function() {
-                this.style.background = '#e3f2fd';
-                this.style.borderColor = '#2196F3';
-            };
-            btn.onmouseleave = function() {
-                this.style.background = '#f8f9fa';
-                this.style.borderColor = '#dee2e6';
-            };
+        dismissBtn.addEventListener('click', () => {
+            currentIssues = [];
+            clearUnderlines();
+            hideSuggestionBox();
         });
         
-        const prevBtn = suggestionBox.querySelector('#harper-prev');
-        const nextBtn = suggestionBox.querySelector('#harper-next');
+        dismissBtn.addEventListener('mouseenter', function() {
+            this.style.background = '#f8f9fa';
+        });
         
-        if (prevBtn && currentIndex > 1) {
-            prevBtn.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                displayIssueSuggestions(currentIssues[currentIndex - 2]);
-            };
-        }
+        dismissBtn.addEventListener('mouseleave', function() {
+            this.style.background = 'transparent';
+        });
         
-        if (nextBtn && currentIndex < totalIssues) {
-            nextBtn.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                displayIssueSuggestions(currentIssues[currentIndex]);
-            };
-        }
+        container.appendChild(dismissBtn);
         
-        const dismissBtn = suggestionBox.querySelector('#harper-dismiss');
-        if (dismissBtn) {
-            dismissBtn.onclick = function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                currentIssues = [];
-                clearUnderlines();
-                hideSuggestionBox();
-            };
-            dismissBtn.onmouseenter = function() {
-                this.style.background = '#f8f9fa';
-            };
-            dismissBtn.onmouseleave = function() {
-                this.style.background = 'transparent';
-            };
-        }
+        // Add to suggestion box
+        suggestionBox.appendChild(container);
         
         console.log('✅ Box populated');
     }
