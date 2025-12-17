@@ -668,20 +668,21 @@
         suggestionBox.id = 'harper-lt-suggestion-box';
         
         suggestionBox.style.cssText = `
-            position: fixed !important;
+            position: absolute !important;
             z-index: 2147483647 !important;
             background: white !important;
-            border: 2px solid #4CAF50 !important;
+            border: 1px solid #d1d5db !important;
             border-radius: 8px !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3) !important;
-            padding: 16px !important;
-            min-width: 300px !important;
-            max-width: 420px !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+            padding: 0 !important;
+            width: 280px !important;
+            max-height: 320px !important;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-            font-size: 14px !important;
-            line-height: 1.5 !important;
+            font-size: 13px !important;
+            line-height: 1.4 !important;
             display: none !important;
             color: #333 !important;
+            overflow: hidden !important;
         `;
         
         document.body.appendChild(suggestionBox);
@@ -1022,6 +1023,9 @@
         }
     }
 
+
+    // THIS FUNCTION GIVES THE POSITION OF THE SUGGESTION BOX.
+
     function positionSuggestionBox(element) {
         if (!suggestionBox || !element) return;
         
@@ -1029,42 +1033,34 @@
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
         
-        // Get viewport dimensions
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
         
-        // Suggestion box dimensions (approximate)
-        const boxWidth = 420;
-        const boxHeight = 300; // estimated
+        const boxWidth = 280;
+        const boxHeight = 320;
         
-        // Start with position below the element
-        let top = rect.bottom + scrollTop + 10;
+        let top = rect.top + scrollTop - boxHeight - 8; // 8px gap above
         let left = rect.left + scrollLeft;
         
-        // Adjust horizontal position if box would go off-screen
-        if (left + boxWidth > viewportWidth + scrollLeft) {
-            // Align to right edge of viewport
-            left = viewportWidth + scrollLeft - boxWidth - 20;
-        }
+        left = left - (boxWidth / 2) + (rect.width / 2);
         
-        // If too far left, align to left edge
+        if (left + boxWidth > viewportWidth + scrollLeft) {
+            left = viewportWidth + scrollLeft - boxWidth - 10;
+        }
         if (left < scrollLeft + 10) {
             left = scrollLeft + 10;
         }
         
-        // Adjust vertical position if box would go off-screen
-        if (top + boxHeight > viewportHeight + scrollTop) {
-            // Position above the element instead
-            top = rect.top + scrollTop - boxHeight - 10;
-            
-            // If still off-screen, position at top of viewport
-            if (top < scrollTop + 10) {
-                top = scrollTop + 10;
-            }
+        // If not enough space above, position BELOW
+        if (top < scrollTop + 10) {
+            top = rect.bottom + scrollTop + 8;
         }
         
-        // Ensure it's within viewport
-        if (top < scrollTop) {
+        // Final check - keep within viewport
+        if (top + boxHeight > viewportHeight + scrollTop - 10) {
+            top = viewportHeight + scrollTop - boxHeight - 10;
+        }
+        if (top < scrollTop + 10) {
             top = scrollTop + 10;
         }
         
@@ -1072,7 +1068,6 @@
         suggestionBox.style.left = left + 'px';
         
         console.log(`📍 Box positioned at: top=${top}px, left=${left}px`);
-        console.log(`📍 Element rect: top=${rect.top}, bottom=${rect.bottom}, left=${rect.left}`);
     }
 
     function displayIssueSuggestions(issue) {
@@ -1202,12 +1197,12 @@
             return;
         }
         
-        suggestionBox.innerHTML = ''; // Clear first
+        suggestionBox.innerHTML = '';
         
         console.log('Populating box...');
         console.log('Issue:', issue);
         
-        // Get the actual error word/phrase
+        // Get error text
         let errorText = '';
         if (issue.context) {
             const offset = issue.context.offset;
@@ -1220,125 +1215,187 @@
             errorText = issue.text || issue.context?.text || 'Issue found';
         }
         
-        const issueMessage = issue.message || issue.shortMessage || 'Issue detected';
-        const contextText = issue.context?.text || '';
+        // Improve message for whitespace errors
+        let issueMessage = issue.message || issue.shortMessage || 'Issue detected';
         
-        // Show issue counter
+        // Check if this is a whitespace error (multiple spaces)
+        if (errorText.trim() === '' && errorText.length > 1) {
+            issueMessage = 'Remove the extra space';
+            // Make sure there's a single space suggestion
+            if (!suggestions || suggestions.length === 0) {
+                suggestions = [' '];
+            }
+        }
+        
         const currentIndex = currentIssues.indexOf(issue) + 1;
         const totalIssues = currentIssues.length;
         
-        // Create container
+        // Main container
         const container = document.createElement('div');
-        container.style.cssText = 'padding: 0; margin: 0;';
+        container.style.cssText = 'display: flex; flex-direction: column; height: 100%; max-height: 320px;';
         
-        // Header
+        // Header (fixed, not scrollable)
         const header = document.createElement('div');
-        header.style.cssText = 'margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #f0f0f0;';
+        header.style.cssText = `
+            padding: 12px !important;
+            border-bottom: 1px solid #e5e7eb !important;
+            background: #f9fafb !important;
+            flex-shrink: 0 !important;
+        `;
+        
+        // Visual representation for whitespace
+        let displayErrorText = errorText;
+        if (errorText.trim() === '' && errorText.length > 1) {
+            displayErrorText = `${errorText.length} spaces`;
+        }
+        
         header.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                <div style="font-weight: 700; color: #2c3e50; font-size: 15px;">
+                <div style="font-weight: 600; color: ${getIssueColor(issue.type)}; font-size: 12px; text-transform: uppercase;">
                     ${getIssueIcon(issue.type)} ${getIssueTypeLabel(issue.type)}
                 </div>
-                <div style="font-size: 12px; color: #999; font-weight: 600;">
-                    ${currentIndex} / ${totalIssues}
+                <div style="font-size: 11px; color: #9ca3af; font-weight: 500;">
+                    ${currentIndex}/${totalIssues}
                 </div>
             </div>
-            <div style="color: #555; font-size: 13px; margin-bottom: 10px;">
+            <div style="color: #1f2937; font-size: 12px; line-height: 1.4; margin-bottom: 6px;">
                 ${escapeHtml(issueMessage)}
             </div>
-            <div style="background: #fff3cd; padding: 10px; border-radius: 6px; border-left: 4px solid #ffc107; color: #856404; font-size: 13px; margin-bottom: 8px;">
-                <strong>Error:</strong> <span style="background: #ffe082; padding: 2px 4px; border-radius: 3px; font-weight: 600;">${escapeHtml(errorText)}</span>
+            <div style="background: #fef3c7; padding: 6px 8px; border-radius: 4px; border-left: 3px solid #f59e0b;">
+                <span style="background: #fde68a; padding: 2px 4px; border-radius: 2px; font-weight: 600; font-size: 12px; color: #92400e;">
+                    ${escapeHtml(displayErrorText)}
+                </span>
             </div>
         `;
         
-        if (contextText && contextText !== errorText) {
-            const contextDiv = document.createElement('div');
-            contextDiv.style.cssText = 'background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; color: #666; font-style: italic;';
-            contextDiv.textContent = `Context: "${contextText}"`;
-            header.appendChild(contextDiv);
-        }
-        
         container.appendChild(header);
+        
+        // Scrollable content area
+        const scrollArea = document.createElement('div');
+        scrollArea.style.cssText = `
+            flex: 1 !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            padding: 10px 12px !important;
+        `;
+        
+        // Add custom scrollbar styles
+        const style = document.createElement('style');
+        style.textContent = `
+            #harper-lt-suggestion-box div::-webkit-scrollbar {
+                width: 6px;
+            }
+            #harper-lt-suggestion-box div::-webkit-scrollbar-track {
+                background: #f1f1f1;
+                border-radius: 3px;
+            }
+            #harper-lt-suggestion-box div::-webkit-scrollbar-thumb {
+                background: #888;
+                border-radius: 3px;
+            }
+            #harper-lt-suggestion-box div::-webkit-scrollbar-thumb:hover {
+                background: #555;
+            }
+        `;
+        if (!document.getElementById('harper-scrollbar-style')) {
+            style.id = 'harper-scrollbar-style';
+            document.head.appendChild(style);
+        }
         
         // Suggestions
         if (suggestions && suggestions.length > 0) {
-            const suggestionsDiv = document.createElement('div');
-            suggestionsDiv.style.cssText = 'margin-top: 12px;';
-            
             const sugTitle = document.createElement('div');
-            sugTitle.style.cssText = 'color: #666; font-size: 12px; font-weight: 600; margin-bottom: 8px;';
-            sugTitle.textContent = 'SUGGESTIONS:';
-            suggestionsDiv.appendChild(sugTitle);
+            sugTitle.style.cssText = 'color: #6b7280; font-size: 11px; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;';
+            sugTitle.textContent = 'Suggestions';
+            scrollArea.appendChild(sugTitle);
             
-            suggestions.slice(0, 5).forEach((suggestion, index) => {
+            suggestions.slice(0, 5).forEach((suggestion) => {
                 const btn = document.createElement('button');
-                btn.className = 'harper-sug-btn';
-                btn.setAttribute('data-suggestion', suggestion);
                 btn.style.cssText = `
                     display: block !important;
                     width: 100% !important;
-                    padding: 10px 14px !important;
+                    padding: 8px 10px !important;
                     margin-bottom: 6px !important;
-                    background: #f8f9fa !important;
-                    border: 1px solid #dee2e6 !important;
-                    border-radius: 6px !important;
-                    color: #212529 !important;
+                    background: #f3f4f6 !important;
+                    border: 1px solid #e5e7eb !important;
+                    border-radius: 4px !important;
+                    color: #111827 !important;
                     cursor: pointer !important;
                     text-align: left !important;
-                    font-size: 14px !important;
-                    transition: all 0.2s !important;
+                    font-size: 13px !important;
+                    transition: all 0.15s !important;
+                    font-weight: 500 !important;
                 `;
-                btn.textContent = suggestion;
                 
-                // Add event listener (not inline onclick)
+                // Display text for suggestion
+                let suggestionDisplay = suggestion;
+                if (suggestion === ' ') {
+                    suggestionDisplay = 'Remove Extra Space';
+                } else if (suggestion.trim() === ' ') {
+                    suggestionDisplay = `[${suggestion.length} space${suggestion.length > 1 ? 's' : ''}]`;
+                }
+                
+                btn.textContent = suggestionDisplay;
+                
                 btn.addEventListener('click', () => {
                     console.log('Applying:', suggestion);
                     applySuggestionToElement(suggestion, issue);
                 });
                 
                 btn.addEventListener('mouseenter', function() {
-                    this.style.background = '#e3f2fd';
-                    this.style.borderColor = '#2196F3';
+                    this.style.background = '#dbeafe';
+                    this.style.borderColor = '#3b82f6';
+                    this.style.transform = 'translateX(2px)';
                 });
                 
                 btn.addEventListener('mouseleave', function() {
-                    this.style.background = '#f8f9fa';
-                    this.style.borderColor = '#dee2e6';
+                    this.style.background = '#f3f4f6';
+                    this.style.borderColor = '#e5e7eb';
+                    this.style.transform = 'translateX(0)';
                 });
                 
-                suggestionsDiv.appendChild(btn);
+                scrollArea.appendChild(btn);
             });
-            
-            container.appendChild(suggestionsDiv);
         } else {
             const noSug = document.createElement('div');
-            noSug.style.cssText = 'color: #999; font-style: italic; margin-top: 12px;';
+            noSug.style.cssText = 'color: #9ca3af; font-style: italic; font-size: 12px; text-align: center; padding: 12px;';
             noSug.textContent = 'No suggestions available';
-            container.appendChild(noSug);
+            scrollArea.appendChild(noSug);
         }
         
-        // Navigation buttons (if multiple issues)
+        container.appendChild(scrollArea);
+        
+        // Footer (fixed, not scrollable)
+        const footer = document.createElement('div');
+        footer.style.cssText = `
+            padding: 10px 12px !important;
+            border-top: 1px solid #e5e7eb !important;
+            background: #ffffff !important;
+            flex-shrink: 0 !important;
+        `;
+        
+        // Navigation (if multiple issues)
         if (totalIssues > 1) {
             const navDiv = document.createElement('div');
-            navDiv.style.cssText = 'display: flex; gap: 8px; margin-top: 12px;';
+            navDiv.style.cssText = 'display: flex; gap: 6px; margin-bottom: 8px;';
             
             const prevBtn = document.createElement('button');
-            prevBtn.textContent = '← Previous';
+            prevBtn.textContent = '←';
             prevBtn.style.cssText = `
                 flex: 1 !important;
-                padding: 8px !important;
-                background: #e3f2fd !important;
-                border: 1px solid #2196F3 !important;
-                border-radius: 6px !important;
-                color: #1976D2 !important;
+                padding: 6px !important;
+                background: #f3f4f6 !important;
+                border: 1px solid #d1d5db !important;
+                border-radius: 4px !important;
+                color: #374151 !important;
                 cursor: pointer !important;
-                font-size: 13px !important;
+                font-size: 12px !important;
                 font-weight: 600 !important;
             `;
             
             if (currentIndex === 1) {
                 prevBtn.disabled = true;
-                prevBtn.style.opacity = '0.5';
+                prevBtn.style.opacity = '0.4';
                 prevBtn.style.cursor = 'not-allowed';
             } else {
                 prevBtn.addEventListener('click', () => {
@@ -1347,22 +1404,22 @@
             }
             
             const nextBtn = document.createElement('button');
-            nextBtn.textContent = 'Next →';
+            nextBtn.textContent = '→';
             nextBtn.style.cssText = `
                 flex: 1 !important;
-                padding: 8px !important;
-                background: #e3f2fd !important;
-                border: 1px solid #2196F3 !important;
-                border-radius: 6px !important;
-                color: #1976D2 !important;
+                padding: 6px !important;
+                background: #f3f4f6 !important;
+                border: 1px solid #d1d5db !important;
+                border-radius: 4px !important;
+                color: #374151 !important;
                 cursor: pointer !important;
-                font-size: 13px !important;
+                font-size: 12px !important;
                 font-weight: 600 !important;
             `;
             
             if (currentIndex === totalIssues) {
                 nextBtn.disabled = true;
-                nextBtn.style.opacity = '0.5';
+                nextBtn.style.opacity = '0.4';
                 nextBtn.style.cursor = 'not-allowed';
             } else {
                 nextBtn.addEventListener('click', () => {
@@ -1372,45 +1429,77 @@
             
             navDiv.appendChild(prevBtn);
             navDiv.appendChild(nextBtn);
-            container.appendChild(navDiv);
+            footer.appendChild(navDiv);
         }
         
-        // Dismiss button
-        const dismissBtn = document.createElement('button');
-        dismissBtn.textContent = 'Dismiss All';
-        dismissBtn.style.cssText = `
-            display: block !important;
-            width: 100% !important;
-            padding: 8px !important;
-            margin-top: 12px !important;
+        // Dismiss buttons
+        const dismissDiv = document.createElement('div');
+        dismissDiv.style.cssText = 'display: flex; gap: 6px;';
+        
+        const dismissCurrentBtn = document.createElement('button');
+        dismissCurrentBtn.textContent = 'Dismiss';
+        dismissCurrentBtn.style.cssText = `
+            flex: 1 !important;
+            padding: 6px !important;
             background: transparent !important;
-            border: 1px solid #ddd !important;
-            border-radius: 6px !important;
-            color: #666 !important;
+            border: 1px solid #f59e0b !important;
+            border-radius: 4px !important;
+            color: #d97706 !important;
             cursor: pointer !important;
-            font-size: 13px !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
         `;
         
-        dismissBtn.addEventListener('click', () => {
+        dismissCurrentBtn.addEventListener('click', () => {
+            const issueIndex = currentIssues.indexOf(issue);
+            if (issueIndex > -1) {
+                currentIssues.splice(issueIndex, 1);
+            }
+            drawUnderlines();
+            if (currentIssues.length > 0) {
+                displayIssueSuggestions(currentIssues[Math.min(issueIndex, currentIssues.length - 1)]);
+            } else {
+                hideSuggestionBox();
+            }
+        });
+        
+        const dismissAllBtn = document.createElement('button');
+        dismissAllBtn.textContent = 'Dismiss All';
+        dismissAllBtn.style.cssText = `
+            flex: 1 !important;
+            padding: 6px !important;
+            background: transparent !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 4px !important;
+            color: #6b7280 !important;
+            cursor: pointer !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+        `;
+        
+        dismissAllBtn.addEventListener('click', () => {
             currentIssues = [];
             clearUnderlines();
             hideSuggestionBox();
         });
         
-        dismissBtn.addEventListener('mouseenter', function() {
-            this.style.background = '#f8f9fa';
-        });
+        dismissDiv.appendChild(dismissCurrentBtn);
+        dismissDiv.appendChild(dismissAllBtn);
+        footer.appendChild(dismissDiv);
         
-        dismissBtn.addEventListener('mouseleave', function() {
-            this.style.background = 'transparent';
-        });
-        
-        container.appendChild(dismissBtn);
-        
-        // Add to suggestion box
+        container.appendChild(footer);
         suggestionBox.appendChild(container);
         
         console.log('✅ Box populated');
+    }
+
+    function getIssueColor(type) {
+        switch (type) {
+            case 'grammar': return '#ef4444';
+            case 'tone': return '#10b981';
+            case 'terminology': return '#3b82f6';
+            default: return '#f59e0b';
+        }
     }
 
     function getIssueIcon(type) {
