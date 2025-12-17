@@ -88,6 +88,62 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         }
         return true;
     }
+    // 📄 FULL DOCUMENT TEXT → analyze entire document (ONE-TIME)
+    if (req.type === "FULL_DOCUMENT_TEXT") {
+        console.log('📄 FULL_DOCUMENT_TEXT received');
+        
+        const allGrammarIssues = [];
+        const allToneIssues = [];
+        const allTerminologyIssues = [];
+
+        (async () => {
+            for (const block of req.payload.blocks) {
+                if (!block.text || block.text.trim().length < 5) continue;
+
+                const result = await analyzeText(block.text);
+
+                // Adjust offsets & collect grammar issues
+                result.grammar.forEach(issue => {
+                    issue.offset += block.startOffset;
+                    allGrammarIssues.push(issue);
+                });
+
+                // Adjust offsets & collect Harper issues
+                result.harper.tone.forEach(issue => {
+                    issue.offset += block.startOffset;
+                    allToneIssues.push(issue);
+                });
+
+                result.harper.terminology.forEach(issue => {
+                    issue.offset += block.startOffset;
+                    allTerminologyIssues.push(issue);
+                });
+            }
+
+            console.log('📊 Full doc issues:', {
+                grammar: allGrammarIssues.length,
+                tone: allToneIssues.length,
+                terminology: allTerminologyIssues.length
+            });
+
+            if (tabId) {
+                chrome.tabs.sendMessage(tabId, {
+                    type: "COMBINED_RESULTS",
+                    payload: {
+                        grammar: allGrammarIssues,
+                        harper: {
+                            tone: allToneIssues,
+                            terminology: allTerminologyIssues
+                        }
+                    }
+                });
+            }
+
+            sendResponse({ success: true });
+        })();
+
+        return true; // ⬅ REQUIRED for async response
+    }
 
     // USER TEXT → analyze with LT and Harper
     if (req.type === "USER_TEXT") {
@@ -219,10 +275,18 @@ async function analyzeText(text) {
 async function checkWithLanguageTool(text) {
     try {
         console.log('🌐 Checking text with LanguageTool...');
-        const r = await fetch("http://10.10.10.36:8081/v2/check", {
+        
+        // Use the public LanguageTool API
+        const r = await fetch("https://api.languagetoolplus.com/v2/check", {
             method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ text, language: "en-US" })
+            headers: { 
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json"
+            },
+            body: new URLSearchParams({ 
+                text: text,
+                language: "en-US"
+            })
         });
         
         if (!r.ok) {
@@ -233,8 +297,8 @@ async function checkWithLanguageTool(text) {
         console.log('✅ LanguageTool found', data.matches?.length || 0, 'issues');
         return data.matches || [];
     } catch (e) {
-        console.error("❌ LanguageTool error:", e);
-        console.warn("⚠️ LanguageTool server not available at http://10.10.10.36:8081");
+        console.error("❌ LanguageTool error:", e.message);
+        console.warn("⚠️ LanguageTool API not available, continuing with Harper only...");
         return [];
     }
 }

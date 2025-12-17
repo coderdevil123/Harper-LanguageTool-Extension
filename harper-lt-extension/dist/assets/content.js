@@ -424,12 +424,20 @@
         const target = e.target;
         if (isEditableElement(target)) {
             activeElement = target;
-            console.log('✓ Focused:', target.tagName, target.type || '', target.className);
-            
-            // Auto-analyze existing text in focused element
+            console.log('✓ Focused:', target.tagName);
+
+            // 🔥 ADD THIS (one-time full scan)
+            if (!target.__harperFullScanned) {
+                target.__harperFullScanned = true;
+
+                setTimeout(() => {
+                    analyzeFullDocument(target);
+                }, 1200);
+            }
+
+            // Existing behavior (DO NOT TOUCH)
             const text = getElementText(target);
             if (text && text.trim().length > 5) {
-                console.log('📝 Auto-analyzing existing text on focus...');
                 clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
                     analyzeText(target);
@@ -437,6 +445,7 @@
             }
         }
     }
+
 
     function handleInput(e) {
         const target = e.target;
@@ -536,6 +545,49 @@
             console.warn('⚠️ Extension was reloaded. Please refresh this page.');
         }
     }
+
+    function analyzeFullDocument(rootElement) {
+        if (!rootElement) return;
+
+        console.log('📄 Starting FULL document analysis');
+
+        const blocks = [];
+
+        const walker = document.createTreeWalker(
+            rootElement,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        let offset = 0;
+
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+
+            if (!node.textContent || !node.textContent.trim()) continue;
+
+            blocks.push({
+                text: node.textContent,
+                startOffset: offset
+            });
+
+            offset += node.textContent.length;
+        }
+
+        if (blocks.length === 0) {
+            console.warn('⚠️ No text blocks found for full scan');
+            return;
+        }
+
+        console.log(`📦 Sending ${blocks.length} blocks for full analysis`);
+
+        chrome.runtime.sendMessage({
+            type: "FULL_DOCUMENT_TEXT",
+            payload: { blocks }
+        });
+    }
+
 
     function getElementText(element) {
         if (!element) return '';
