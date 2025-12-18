@@ -12,6 +12,8 @@
     let initialAnalysisTimer = null;
     let googleDocsRetryCount = 0;
     const MAX_GOOGLE_DOCS_RETRIES = 5;
+    const IS_GOOGLE_DOCS = location.hostname === 'docs.google.com';
+
 
     // Document analyzer state
     let documentAnalysisState = {
@@ -413,6 +415,17 @@
     }
 
     function handleSelectionChange() {
+        if (IS_GOOGLE_DOCS) {
+            const selectedText = window.getSelection()?.toString();
+
+            if (selectedText && selectedText.trim().length > 20) {
+                chrome.runtime.sendMessage({
+                type: "USER_TEXT",
+                payload: { text: selectedText }
+                });
+            }
+            return;
+        }
         // Debounce selection changes
         clearTimeout(initialAnalysisTimer);
         initialAnalysisTimer = setTimeout(() => {
@@ -435,10 +448,13 @@
         const target = e.target;
         if (isEditableElement(target)) {
             activeElement = target;
+            if (!target.dataset.harperBlockId) {
+                target.dataset.harperBlockId = `harper-block-${Date.now()}`;
+            }
             console.log('✓ Focused:', target.tagName);
 
             // 🔥 ADD THIS (one-time full scan)
-            if (!target.__harperFullScanned) {
+            if (!IS_GOOGLE_DOCS && !target.__harperFullScanned) {
                 target.__harperFullScanned = true;
 
                 setTimeout(() => {
@@ -513,49 +529,34 @@
     }
 
     function analyzeText(element) {
-        const text = getElementText(element);
-        
-        if (!text || text.trim().length < 5) {
-            console.log('⏭️ Text too short, skipping');
-            hideSuggestionBox();
-            return;
-        }
-        
-        console.log('📝 Analyzing:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
-        
-        // Check if extension context is valid
         if (!chrome.runtime?.id) {
             console.warn('⚠️ Extension context invalidated. Please refresh the page.');
             return;
         }
-        
-        // Wake up service worker first
-        try {
-            chrome.runtime.sendMessage({ type: "PING" }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.error('❌ Service worker not responding:', chrome.runtime.lastError.message);
-                    return;
-                }
-                
-                console.log('✅ Service worker active');
-                
-                // Now send the actual text for analysis
-                chrome.runtime.sendMessage({
-                    type: "USER_TEXT",
-                    payload: { text }
-                }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        console.error('❌ Send error:', chrome.runtime.lastError.message);
-                    } else {
-                        console.log('✅ Text sent to background, response:', response);
-                    }
-                });
-            });
-        } catch (error) {
-            console.error('❌ Extension error:', error.message);
-            console.warn('⚠️ Extension was reloaded. Please refresh this page.');
-        }
+
+        const text = getElementText(element);
+        if (!text || text.trim().length < 5) return;
+
+        // 🔒 HARD LIMIT (prevents overload)
+        const MAX_CHARS = 8000;
+        const safeText = text.length > MAX_CHARS
+            ? text.slice(0, MAX_CHARS)
+            : text;
+
+        chrome.runtime.sendMessage({
+            type: "USER_TEXT",
+            payload: {
+                text: safeText,
+                blockId: element.dataset.harperBlockId || null
+            }
+        });
+
+        console.log(
+            '📝 Analyzing block:',
+            safeText.substring(0, 100) + (safeText.length > 100 ? '...' : '')
+        );
     }
+
 
     function analyzeFullDocument(rootElement) {
         if (!rootElement) return;
@@ -774,14 +775,11 @@
             const selection = window.getSelection();
             
             try {
-                // For contenteditable or regular textareas
                 const tagName = activeElement.tagName?.toLowerCase();
                 
                 if (tagName === 'textarea' || tagName === 'input') {
-                    // For textarea/input, we need to create a mirror div to measure position
                     drawUnderlineForInputElement(activeElement, issue, color);
                 } else if (activeElement.isContentEditable) {
-                    // For contenteditable, use Range API
                     drawUnderlineForContentEditable(activeElement, issue, color, text);
                 } else {
                     console.warn('Unsupported element type for underlines');
@@ -795,7 +793,6 @@
     }
 
     function drawUnderlineForInputElement(element, issue, color) {
-        // For input/textarea, create a mirror element to measure text
         const rect = element.getBoundingClientRect();
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
@@ -807,7 +804,6 @@
         const paddingLeft = parseFloat(computedStyle.paddingLeft) || 0;
         const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
         
-        // Create temporary canvas to measure text width accurately
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         context.font = `${fontSize}px ${fontFamily}`;
@@ -816,11 +812,9 @@
         const beforeError = text.substring(0, issue.offset);
         const errorText = text.substring(issue.offset, issue.offset + issue.length);
         
-        // Measure actual text width
         const beforeWidth = context.measureText(beforeError).width;
         const errorWidth = context.measureText(errorText).width;
         
-        // Create underline
         const underline = document.createElement('div');
         underline.className = 'harper-lt-underline';
         underline.style.cssText = `
@@ -841,7 +835,6 @@
         underline.style.top = top + 'px';
         underline.style.width = errorWidth + 'px';
         
-        // Add wavy effect
         underline.style.backgroundImage = `repeating-linear-gradient(
             45deg,
             transparent,
@@ -851,7 +844,6 @@
         )`;
         underline.style.backgroundSize = '6px 2px';
         
-        // Click handler
         underline.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -863,7 +855,6 @@
     }
 
     function drawUnderlineForContentEditable(element, issue, color, fullText) {
-        // For contenteditable elements, use TreeWalker to find text nodes
         const walker = document.createTreeWalker(
             element,
             NodeFilter.SHOW_TEXT,
@@ -900,7 +891,6 @@
             range.setStart(targetNode, offsetInNode);
             range.setEnd(targetNode, Math.min(offsetInNode + issue.length, targetNode.textContent.length));
             
-            // Get the bounding rect of the range
             const rects = range.getClientRects();
             
             if (rects.length === 0) {
@@ -908,7 +898,6 @@
                 return;
             }
             
-            // Create underlines for each rect (handles multi-line)
             Array.from(rects).forEach(rect => {
                 const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
                 const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
@@ -929,7 +918,6 @@
                 underline.style.top = (rect.bottom + scrollTop - 2) + 'px';
                 underline.style.width = rect.width + 'px';
                 
-                // Add wavy effect
                 underline.style.backgroundImage = `repeating-linear-gradient(
                     45deg,
                     transparent,
@@ -939,7 +927,6 @@
                 )`;
                 underline.style.backgroundSize = '6px 2px';
                 
-                // Click handler
                 underline.onclick = (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -975,7 +962,6 @@
         
         currentIssues = [];
         
-        // Collect Grammar issues from LanguageTool FIRST (higher priority)
         if (results.grammar && Array.isArray(results.grammar)) {
             results.grammar.forEach(issue => {
                 currentIssues.push({ ...issue, type: 'grammar', priority: 1 });
@@ -1486,6 +1472,84 @@
         dismissDiv.appendChild(dismissCurrentBtn);
         dismissDiv.appendChild(dismissAllBtn);
         footer.appendChild(dismissDiv);
+        
+        // Add to Dictionary button (new!)
+        const addToDictBtn = document.createElement('button');
+        addToDictBtn.textContent = '📖 Add to Dictionary';
+        addToDictBtn.style.cssText = `
+            width: 100% !important;
+            padding: 6px !important;
+            margin-top: 6px !important;
+            background: transparent !important;
+            border: 1px solid #10b981 !important;
+            border-radius: 4px !important;
+            color: #059669 !important;
+            cursor: pointer !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+        `;
+        
+        addToDictBtn.addEventListener('click', () => {
+            // Get the error word
+            let word = errorText.trim();
+            
+            if (!word) {
+                console.error('No word to add to dictionary');
+                return;
+            }
+            
+            console.log('📖 Adding to dictionary:', word);
+            
+            // Send message to background to add word
+            chrome.runtime.sendMessage({
+                type: 'ADD_TO_DICTIONARY',
+                payload: { word: word }
+            }, (response) => {
+                if (response && response.success) {
+                    console.log('✅ Added to dictionary:', response.word);
+                    
+                    // Show confirmation
+                    addToDictBtn.textContent = '✅ Added!';
+                    addToDictBtn.style.borderColor = '#10b981';
+                    addToDictBtn.style.color = '#10b981';
+                    
+                    // Remove this issue from the list
+                    const issueIndex = currentIssues.indexOf(issue);
+                    if (issueIndex > -1) {
+                        currentIssues.splice(issueIndex, 1);
+                    }
+                    
+                    // Redraw underlines
+                    drawUnderlines();
+                    
+                    // Show next issue or hide
+                    setTimeout(() => {
+                        if (currentIssues.length > 0) {
+                            displayIssueSuggestions(currentIssues[Math.min(issueIndex, currentIssues.length - 1)]);
+                        } else {
+                            hideSuggestionBox();
+                        }
+                    }, 500);
+                } else {
+                    console.error('Failed to add to dictionary');
+                    addToDictBtn.textContent = '❌ Failed';
+                }
+            });
+        });
+        
+        addToDictBtn.addEventListener('mouseenter', function() {
+            if (this.textContent.includes('Add to Dictionary')) {
+                this.style.background = '#d1fae5';
+            }
+        });
+        
+        addToDictBtn.addEventListener('mouseleave', function() {
+            if (this.textContent.includes('Add to Dictionary')) {
+                this.style.background = 'transparent';
+            }
+        });
+        
+        footer.appendChild(addToDictBtn);
         
         container.appendChild(footer);
         suggestionBox.appendChild(container);

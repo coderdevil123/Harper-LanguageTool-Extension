@@ -6,6 +6,17 @@ let lastAnalysisResults = {
     harper: { tone: [], terminology: [] }
 };
 
+// Custom dictionary for ignored words
+let customDictionary = new Set();
+
+// Load dictionary from storage on startup
+chrome.storage.local.get(['customDictionary'], (result) => {
+    if (result.customDictionary) {
+        customDictionary = new Set(result.customDictionary);
+        console.log('📖 Loaded custom dictionary:', customDictionary.size, 'words');
+    }
+});
+
 // Keep service worker alive
 let keepAliveInterval;
 let harperInitialized = false;
@@ -41,6 +52,57 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     if (req.type === "PING") {
         console.log('🏓 PING received, responding...');
         sendResponse({ status: 'active' });
+        return true;
+    }
+
+    // Handle ADD_TO_DICTIONARY
+    if (req.type === "ADD_TO_DICTIONARY") {
+        const word = req.payload.word.toLowerCase().trim();
+        
+        if (word) {
+            customDictionary.add(word);
+            
+            // Save to storage
+            chrome.storage.local.set({ 
+                customDictionary: Array.from(customDictionary) 
+            }, () => {
+                console.log('📖 Added to dictionary:', word);
+                console.log('📖 Dictionary now has:', customDictionary.size, 'words');
+                sendResponse({ success: true, word: word });
+            });
+        } else {
+            sendResponse({ success: false, error: 'Invalid word' });
+        }
+        
+        return true; // Async response
+    }
+
+    // Handle GET_DICTIONARY
+    if (req.type === "GET_DICTIONARY") {
+        sendResponse({ 
+            success: true, 
+            dictionary: Array.from(customDictionary) 
+        });
+        return true;
+    }
+
+    // Handle REMOVE_FROM_DICTIONARY
+    if (req.type === "REMOVE_FROM_DICTIONARY") {
+        const word = req.payload.word.toLowerCase().trim();
+        
+        if (customDictionary.has(word)) {
+            customDictionary.delete(word);
+            
+            chrome.storage.local.set({ 
+                customDictionary: Array.from(customDictionary) 
+            }, () => {
+                console.log('📖 Removed from dictionary:', word);
+                sendResponse({ success: true, word: word });
+            });
+        } else {
+            sendResponse({ success: false, error: 'Word not in dictionary' });
+        }
+        
         return true;
     }
 
@@ -88,6 +150,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     }
     // 📄 FULL DOCUMENT TEXT → analyze entire document (ONE-TIME)
     if (req.type === "FULL_DOCUMENT_TEXT") {
+        if (sender?.tab?.url?.includes('docs.google.com')) {
+            sendResponse({ success: false, reason: 'Google Docs full scan disabled' });
+            return true;
+        }
         console.log('📄 FULL_DOCUMENT_TEXT received');
         
         const allGrammarIssues = [];
@@ -172,7 +238,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 console.log('📤 Sending COMBINED_RESULTS to tab:', tabId);
                 chrome.tabs.sendMessage(tabId, {
                     type: "COMBINED_RESULTS",
-                    payload: result
+                    payload: {
+                    ...result,
+                    blockId: req.payload.blockId || null
+                    }
                 }, (response) => {
                     if (chrome.runtime.lastError) {
                         console.error('❌ Failed to send results:', chrome.runtime.lastError.message);
@@ -196,7 +265,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     // Bubble requests suggestions
     if (req.type === "GET_SUGGESTIONS") {
         const issue = req.payload.issue;
-
         let suggestions = [];
 
         if (issue.replacements) {
@@ -292,8 +360,30 @@ async function checkWithLanguageTool(text) {
         }
         
         const data = await r.json();
-        console.log('✅ LanguageTool found', data.matches?.length || 0, 'issues');
-        return data.matches || [];
+        
+        // Filter out words in custom dictionary
+        let matches = data.matches || [];
+        matches = matches.filter(match => {
+            // Extract the actual word from the error
+            let word = '';
+            if (match.context) {
+                const offset = match.context.offset;
+                const length = match.context.length;
+                word = match.context.text.substring(offset, offset + length);
+            }
+            
+            // Check if word is in custom dictionary
+            const isInDictionary = customDictionary.has(word.toLowerCase().trim());
+            
+            if (isInDictionary) {
+                console.log('📖 Ignoring word from dictionary:', word);
+            }
+            
+            return !isInDictionary;
+        });
+        
+        console.log('✅ LanguageTool found', matches.length, 'issues (after dictionary filter)');
+        return matches;
     } catch (e) {
         console.error("❌ LanguageTool error:", e.message);
         console.warn("⚠️ LanguageTool API not available, continuing with Harper only...");
@@ -323,6 +413,14 @@ function checkWithHarperSimulation(text) {
     const intensifierRegex = /\b(very|really|extremely|absolutely|totally|completely)\b/gi;
     let match;
     while ((match = intensifierRegex.exec(text)) !== null) {
+        const word = match[0].toLowerCase();
+        
+        // Skip if in custom dictionary
+        if (customDictionary.has(word)) {
+            console.log('📖 Ignoring word from dictionary:', word);
+            continue;
+        }
+        
         tone.push({
             message: "Consider using a more precise word instead of intensifiers",
             offset: match.index,
@@ -340,7 +438,6 @@ function checkWithHarperSimulation(text) {
     
     // Expanded terminology check (informal words, slang, contractions)
     const informalWords = {
-        // Informal contractions
         'gonna': 'going to',
         'wanna': 'want to',
         'gotta': 'have to',
@@ -352,15 +449,11 @@ function checkWithHarperSimulation(text) {
         'shoulda': 'should have',
         'coulda': 'could have',
         'woulda': 'would have',
-        
-        // Colloquialisms
         'yeah': 'yes',
         'nope': 'no',
         'yep': 'yes',
         'ok': 'okay',
         'cause': 'because',
-        
-        // Informal words
         'lots of': 'many',
         'a lot of': 'many',
         'tons of': 'numerous',
@@ -375,6 +468,14 @@ function checkWithHarperSimulation(text) {
         const regex = new RegExp(`\\b${informal}\\b`, 'gi');
         let match;
         while ((match = regex.exec(text)) !== null) {
+            const word = match[0].toLowerCase();
+            
+            // Skip if in custom dictionary
+            if (customDictionary.has(word)) {
+                console.log('📖 Ignoring word from dictionary:', word);
+                continue;
+            }
+            
             terminology.push({
                 message: `Consider using "${formal}" instead of informal "${informal}"`,
                 offset: match.index,
@@ -394,10 +495,4 @@ function checkWithHarperSimulation(text) {
     console.log('✅ Harper simulation:', tone.length, 'tone issues and', terminology.length, 'terminology issues');
     
     return { tone, terminology };
-}
-
-function keepAlive() {
-    keepAliveInterval = setInterval(() => {
-        console.log('🔄 Keeping service worker alive...');
-    }, 20000);
 }
